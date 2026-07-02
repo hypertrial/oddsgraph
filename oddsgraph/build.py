@@ -85,6 +85,7 @@ def build(
             "fit_calibration", lambda: fit_calibration(db, out_dir)
         )[1]
         _stage("apply_calibration_confidence", lambda: apply_calibration_confidence(db, effective_thresholds))
+        _stage("write_final_edges", lambda: _write_final_edges(db, out_dir))
         _stage("compute_transitive_closure", lambda: compute_transitive_closure(db, out_dir))
         lp_warnings = _stage("solve_event_coherence", lambda: solve_event_coherence(db, out_dir))
         _stage("write_constraints", lambda: _write_constraints(db, out_dir))
@@ -94,6 +95,10 @@ def build(
             _stage("run_evaluation", lambda: run_evaluation(db, out_dir, resolutions_path))
         stats = _stage("stats", lambda: _stats(db, start))
         _stage("write_reports", lambda: write_reports(db, out_dir, stats))
+        _stage(
+            "validate_generated_artifacts",
+            lambda: _validate_generated_artifacts(db, out_dir, has_evaluation=resolutions_path is not None),
+        )
         _write_manifest(
             input_path,
             out_dir,
@@ -156,6 +161,35 @@ def _write_manifest(
         json.dumps(manifest, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
+
+
+def _copy_table(db: DuckDB, out_dir: Path, table: str, artifact: str) -> None:
+    db.execute(f"COPY {table} TO '{q(out_dir / artifact)}' (FORMAT PARQUET);")
+
+
+def _write_final_edges(db: DuckDB, out_dir: Path) -> None:
+    _copy_table(db, out_dir, "logic_edges_v", "logic_edges.parquet")
+    _copy_table(db, out_dir, "price_edges_v", "price_edges.parquet")
+
+
+def _validate_generated_artifacts(db: DuckDB, out_dir: Path, *, has_evaluation: bool) -> None:
+    artifacts = list(GENERATED_PARQUET_ARTIFACTS)
+    if has_evaluation:
+        artifacts.extend(OPTIONAL_PARQUET_ARTIFACTS)
+    missing = [name for name in artifacts if not (out_dir / name).exists()]
+    if missing:
+        raise RuntimeError("Missing generated artifacts: " + ", ".join(missing))
+
+    for table, artifact in (
+        ("logic_edges_v", "logic_edges.parquet"),
+        ("price_edges_v", "price_edges.parquet"),
+    ):
+        table_count = int(db.scalar(f"SELECT count(*) FROM {table}") or 0)
+        file_count = int(db.scalar(f"SELECT count(*) FROM read_parquet('{q(out_dir / artifact)}')") or 0)
+        if table_count != file_count:
+            raise RuntimeError(
+                f"{artifact} is stale: table has {table_count} rows, artifact has {file_count}"
+            )
 
 
 def _create_views(
@@ -631,6 +665,7 @@ def _score_edges(db: DuckDB, out_dir: Path) -> None:
         SELECT
             c.src_node_id,
             c.dst_node_id,
+            c.candidate_type,
             CASE
                 WHEN c.candidate_type = 'complement' THEN 'complement'
                 WHEN c.candidate_type = 'equivalence' THEN 'equivalent'
@@ -751,8 +786,6 @@ def _score_edges(db: DuckDB, out_dir: Path) -> None:
             );
         """
     )
-    db.execute(f"COPY logic_edges_v TO '{q(out_dir / 'logic_edges.parquet')}' (FORMAT PARQUET);")
-    db.execute(f"COPY price_edges_v TO '{q(out_dir / 'price_edges.parquet')}' (FORMAT PARQUET);")
 
 
 def _write_constraints(db: DuckDB, out_dir: Path) -> None:

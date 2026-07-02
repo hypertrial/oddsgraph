@@ -4,6 +4,30 @@ from pathlib import Path
 from typing import Any
 
 from .queries import DuckDB, q
+from .sql import create_table_from_rows_sql
+
+
+EVALUATION_COLUMNS = [
+    "metric_type",
+    "artifact",
+    "edge_basis",
+    "edge_type",
+    "violation_type",
+    "liquidity_bucket",
+    "edge_count",
+    "value",
+]
+
+EVALUATION_EMPTY_TYPES = {
+    "metric_type": "VARCHAR",
+    "artifact": "VARCHAR",
+    "edge_basis": "VARCHAR",
+    "edge_type": "VARCHAR",
+    "violation_type": "VARCHAR",
+    "liquidity_bucket": "INTEGER",
+    "edge_count": "BIGINT",
+    "value": "DOUBLE",
+}
 
 
 def run_evaluation(db: DuckDB, out_dir: Path, resolutions_path: Path) -> None:
@@ -120,38 +144,12 @@ def _brier_rows(db: DuckDB) -> list[dict[str, Any]]:
 
 
 def _write_evaluation(db: DuckDB, out_dir: Path, rows: list[dict[str, Any]]) -> None:
-    if rows:
-        values = ", ".join(
-            "("
-            f"'{q(row['metric_type'])}', "
-            f"{_nullable(row.get('artifact'))}, "
-            f"{_nullable(row.get('edge_basis'))}, "
-            f"{_nullable(row.get('edge_type'))}, "
-            f"{_nullable(row.get('violation_type'))}, "
-            f"{_nullable(row.get('liquidity_bucket'))}, "
-            f"{int(row.get('edge_count') or 0)}, "
-            f"{float(row.get('value') or 0)}"
-            ")"
-            for row in rows
-        )
-        db.execute(
-            "CREATE TABLE evaluation_v AS SELECT * FROM (VALUES " + values + ") AS t("
-            "metric_type, artifact, edge_basis, edge_type, violation_type, liquidity_bucket, edge_count, value)"
-        )
-    else:
-        db.execute("""
-            CREATE TABLE evaluation_v AS
-            SELECT
-                NULL::VARCHAR AS metric_type,
-                NULL::VARCHAR AS artifact,
-                NULL::VARCHAR AS edge_basis,
-                NULL::VARCHAR AS edge_type,
-                NULL::VARCHAR AS violation_type,
-                NULL::INTEGER AS liquidity_bucket,
-                NULL::BIGINT AS edge_count,
-                NULL::DOUBLE AS value
-            WHERE false
-        """)
+    db.execute(create_table_from_rows_sql(
+        "evaluation_v",
+        rows,
+        EVALUATION_COLUMNS,
+        EVALUATION_EMPTY_TYPES,
+    ))
     db.execute(f"COPY evaluation_v TO '{q(out_dir / 'evaluation.parquet')}' (FORMAT PARQUET);")
 
 
@@ -178,11 +176,3 @@ def _write_evaluation_report(out_dir: Path, rows: list[dict[str, Any]]) -> None:
                 )
             )
     (reports / "evaluation.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _nullable(value: Any) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, str):
-        return f"'{q(value)}'"
-    return str(value)

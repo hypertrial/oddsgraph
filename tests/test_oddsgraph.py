@@ -8,10 +8,12 @@ import pytest
 
 from oddsgraph.build import build
 from oddsgraph.cli import main
+from oddsgraph.coherence import EventModel, LpConstraint, _solve_l1_repair
 from oddsgraph.queries import DuckDB, q
 from oddsgraph.rules import load_taxonomy
 from oddsgraph.schema import validate_input
-from tests.conftest import write_synthetic_resolutions
+from oddsgraph.sql import sql_literal
+from tests.synthetic import write_synthetic_resolutions
 
 
 ARTIFACTS = {
@@ -167,6 +169,21 @@ def test_build_outputs_artifacts_and_core_logic(synthetic_output: Path) -> None:
         """)
         assert nary == [{"constraint_type": "one_of_n", "current_sum_price": pytest.approx(1.0)}]
 
+        coherence = db.rows(f"""
+            SELECT solver_status, incoherence_distance
+            FROM read_parquet('{q(synthetic_output / "coherence.parquet")}')
+            WHERE event_slug = 'world-cup-golden-boot-winner'
+        """)
+        assert coherence == [{"solver_status": "optimal", "incoherence_distance": pytest.approx(0.0)}]
+
+        false_global_violations = int(db.scalar(f"""
+            SELECT count(*)
+            FROM read_parquet('{q(synthetic_output / "violations.parquet")}')
+            WHERE violation_type = 'global_incoherence'
+                AND event_slug_src = 'world-cup-golden-boot-winner'
+        """))
+        assert false_global_violations == 0
+
         current_sum = float(db.scalar(f"""
             SELECT current_sum_price
             FROM read_parquet('{q(synthetic_output / "market_groups.parquet")}')
@@ -264,6 +281,19 @@ def test_build_manifest_marks_success(synthetic_output: Path) -> None:
     assert manifest["effective_thresholds"] is not None
     assert "reports/summary.md" in manifest["reports"]
     assert "reports/coverage.md" in manifest["reports"]
+    db = DuckDB()
+    try:
+        for stat_key, artifact in (
+            ("logic_edges", "logic_edges.parquet"),
+            ("price_edges", "price_edges.parquet"),
+        ):
+            artifact_count = int(db.scalar(f"""
+                SELECT count(*)
+                FROM read_parquet('{q(synthetic_output / artifact)}')
+            """))
+            assert manifest["stats"][stat_key] == artifact_count
+    finally:
+        db.close()
 
 
 def test_taxonomy_loader_round_trip() -> None:
@@ -271,6 +301,29 @@ def test_taxonomy_loader_round_trip() -> None:
     assert taxonomy.name == "wc2026"
     assert len(taxonomy.stage_rules) == 5
     assert "world-cup-winner" in taxonomy.single_winner_slugs
+
+
+def test_lp_constraint_senses_preserve_feasible_observations() -> None:
+    model = EventModel(
+        "constraint-sense",
+        ["a", "b", "c", "d"],
+        pytest.importorskip("numpy").array([0.4, 0.6, 0.2, 0.2]),
+        {"a": 0, "b": 1, "c": 2, "d": 3},
+    )
+    constraints = [
+        LpConstraint("simplex", "eq", [(0, 1.0), (1, 1.0)], 1.0),
+        LpConstraint("complement", "eq", [(0, 1.0), (1, 1.0)], 1.0),
+        LpConstraint("equivalent", "eq", [(2, 1.0), (3, -1.0)], 0.0),
+        LpConstraint("implies", "le", [(2, 1.0), (0, -1.0)], 0.0),
+        LpConstraint("exclusion", "le", [(0, 1.0), (2, 1.0)], 1.0),
+        LpConstraint("family_sum", "le", [(2, 1.0), (3, 1.0)], 1.0),
+    ]
+
+    repaired, distance, status = _solve_l1_repair(model, constraints)
+
+    assert status == "optimal"
+    assert distance == pytest.approx(0.0)
+    assert list(repaired) == pytest.approx(list(model.observed))
 
 
 def test_evaluation_with_resolutions(synthetic_input: Path, tmp_path: Path) -> None:
@@ -405,14 +458,4 @@ def _write_input(path: Path, rows: list[tuple[Any, ...]]) -> None:
 
 
 def _values(rows: list[tuple[Any, ...]]) -> str:
-    return ", ".join("(" + ", ".join(_lit(value) for value in row) + ")" for row in rows)
-
-
-def _lit(value: Any) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, str):
-        return "'" + q(value) + "'"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
+    return ", ".join("(" + ", ".join(sql_literal(value) for value in row) + ")" for row in rows)

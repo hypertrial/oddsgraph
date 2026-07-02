@@ -11,6 +11,7 @@ from scipy.optimize import linprog
 
 from . import thresholds as T
 from .queries import DuckDB, q
+from .sql import create_table_from_rows_sql, values_rows_sql
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,67 @@ class EventModel:
     node_ids: list[str]
     observed: np.ndarray
     index: dict[str, int]
+
+
+@dataclass(frozen=True)
+class LpConstraint:
+    kind: str
+    sense: str
+    coeffs: list[tuple[int, float]]
+    rhs: float
+
+
+DERIVED_EDGE_COLUMNS = [
+    "src_node_id",
+    "dst_node_id",
+    "edge_type",
+    "edge_basis",
+    "confidence",
+    "path",
+    "evidence",
+]
+
+DERIVED_EDGE_EMPTY_TYPES = {
+    "src_node_id": "VARCHAR",
+    "dst_node_id": "VARCHAR",
+    "edge_type": "VARCHAR",
+    "edge_basis": "VARCHAR",
+    "confidence": "DOUBLE",
+    "path": "VARCHAR",
+    "evidence": "VARCHAR",
+}
+
+COHERENCE_COLUMNS = [
+    "event_slug",
+    "node_count",
+    "constraint_count",
+    "incoherence_distance",
+    "solver_status",
+]
+
+COHERENCE_EMPTY_TYPES = {
+    "event_slug": "VARCHAR",
+    "node_count": "BIGINT",
+    "constraint_count": "BIGINT",
+    "incoherence_distance": "DOUBLE",
+    "solver_status": "VARCHAR",
+}
+
+REPAIR_COLUMNS = [
+    "event_slug",
+    "node_id",
+    "observed_price",
+    "repaired_price",
+    "adjustment",
+]
+
+REPAIR_EMPTY_TYPES = {
+    "event_slug": "VARCHAR",
+    "node_id": "VARCHAR",
+    "observed_price": "DOUBLE",
+    "repaired_price": "DOUBLE",
+    "adjustment": "DOUBLE",
+}
 
 
 def compute_transitive_closure(db: DuckDB, out_dir: Path) -> None:
@@ -65,18 +127,12 @@ def compute_transitive_closure(db: DuckDB, out_dir: Path) -> None:
     if derived:
         db.execute("CREATE TABLE derived_edges_v AS " + _derived_values_sql(derived))
     else:
-        db.execute("""
-            CREATE TABLE derived_edges_v AS
-            SELECT
-                NULL::VARCHAR AS src_node_id,
-                NULL::VARCHAR AS dst_node_id,
-                NULL::VARCHAR AS edge_type,
-                NULL::VARCHAR AS edge_basis,
-                NULL::DOUBLE AS confidence,
-                NULL::VARCHAR AS path,
-                NULL::VARCHAR AS evidence
-            WHERE false
-        """)
+        db.execute(create_table_from_rows_sql(
+            "derived_edges_v",
+            derived,
+            DERIVED_EDGE_COLUMNS,
+            DERIVED_EDGE_EMPTY_TYPES,
+        ))
     db.execute(f"COPY derived_edges_v TO '{q(out_dir / 'derived_edges.parquet')}' (FORMAT PARQUET);")
 
 
@@ -135,17 +191,13 @@ def solve_event_coherence(db: DuckDB, out_dir: Path) -> list[str]:
                 "adjustment": float(rep - obs),
             })
 
-    _write_table(db, out_dir / "coherence.parquet", "coherence_v", coherence_rows, [
-        "event_slug", "node_count", "constraint_count", "incoherence_distance", "solver_status",
-    ])
-    _write_table(db, out_dir / "coherence_repairs.parquet", "coherence_repairs_v", repair_rows, [
-        "event_slug", "node_id", "observed_price", "repaired_price", "adjustment",
-    ])
+    _write_table(db, out_dir / "coherence.parquet", "coherence_v", coherence_rows, COHERENCE_COLUMNS, COHERENCE_EMPTY_TYPES)
+    _write_table(db, out_dir / "coherence_repairs.parquet", "coherence_repairs_v", repair_rows, REPAIR_COLUMNS, REPAIR_EMPTY_TYPES)
     return warnings
 
 
-def _collect_constraints(db: DuckDB, model: EventModel) -> list[tuple[str, list[tuple[int, float]], float]]:
-    constraints: list[tuple[str, list[tuple[int, float]], float]] = []
+def _collect_constraints(db: DuckDB, model: EventModel) -> list[LpConstraint]:
+    constraints: list[LpConstraint] = []
     slug = q(model.event_slug)
 
     for row in db.rows(f"""
@@ -158,7 +210,7 @@ def _collect_constraints(db: DuckDB, model: EventModel) -> list[tuple[str, list[
         if len(ids) < 2:
             continue
         coeffs = [(model.index[n], 1.0) for n in ids]
-        constraints.append(("simplex", coeffs, 1.0))
+        constraints.append(LpConstraint("simplex", "eq", coeffs, 1.0))
 
     for row in db.rows(f"""
         SELECT src_node_id, dst_node_id
@@ -168,7 +220,17 @@ def _collect_constraints(db: DuckDB, model: EventModel) -> list[tuple[str, list[
     """):
         if row["src_node_id"] in model.index and row["dst_node_id"] in model.index:
             i, j = model.index[row["src_node_id"]], model.index[row["dst_node_id"]]
-            constraints.append(("complement", [(i, 1.0), (j, 1.0)], 1.0))
+            constraints.append(LpConstraint("complement", "eq", [(i, 1.0), (j, 1.0)], 1.0))
+
+    for row in db.rows(f"""
+        SELECT src_node_id, dst_node_id
+        FROM logic_edges_v
+        WHERE edge_type = 'equivalent'
+            AND event_slug_src = '{slug}'
+    """):
+        if row["src_node_id"] in model.index and row["dst_node_id"] in model.index:
+            i, j = model.index[row["src_node_id"]], model.index[row["dst_node_id"]]
+            constraints.append(LpConstraint("equivalent", "eq", [(i, 1.0), (j, -1.0)], 0.0))
 
     for table in ("logic_edges_v", "derived_edges_v"):
         for row in db.rows(f"""
@@ -184,7 +246,7 @@ def _collect_constraints(db: DuckDB, model: EventModel) -> list[tuple[str, list[
         """):
             if row["src_node_id"] in model.index and row["dst_node_id"] in model.index:
                 i, j = model.index[row["src_node_id"]], model.index[row["dst_node_id"]]
-                constraints.append(("implies", [(i, 1.0), (j, -1.0)], 0.0))
+                constraints.append(LpConstraint("implies", "le", [(i, 1.0), (j, -1.0)], 0.0))
 
     for row in db.rows(f"""
         SELECT src_node_id, dst_node_id
@@ -194,7 +256,7 @@ def _collect_constraints(db: DuckDB, model: EventModel) -> list[tuple[str, list[
     """):
         if row["src_node_id"] in model.index and row["dst_node_id"] in model.index:
             i, j = model.index[row["src_node_id"]], model.index[row["dst_node_id"]]
-            constraints.append(("exclusion", [(i, 1.0), (j, 1.0)], 1.0))
+            constraints.append(LpConstraint("exclusion", "le", [(i, 1.0), (j, 1.0)], 1.0))
 
     families: dict[str, list[str]] = defaultdict(list)
     for row in db.rows(f"""
@@ -206,13 +268,13 @@ def _collect_constraints(db: DuckDB, model: EventModel) -> list[tuple[str, list[
     for nodes in families.values():
         coeffs = [(model.index[n], 1.0) for n in nodes if n in model.index]
         if len(coeffs) >= 2:
-            constraints.append(("family_sum", coeffs, 1.0))
+            constraints.append(LpConstraint("family_sum", "le", coeffs, 1.0))
     return constraints
 
 
 def _solve_l1_repair(
     model: EventModel,
-    constraints: list[tuple[str, list[tuple[int, float]], float]],
+    constraints: list[LpConstraint],
 ) -> tuple[np.ndarray, float, str]:
     n = len(model.node_ids)
     if n == 0:
@@ -232,24 +294,23 @@ def _solve_l1_repair(
         row[2 * n + i] = 1.0
         A_eq.append(row)
         b_eq.append(model.observed[i])
-    A_eq_arr = np.array(A_eq) if A_eq else None
-    b_eq_arr = np.array(b_eq) if b_eq else None
-
     A_ub = []
     b_ub = []
-    for _, coeffs, rhs in constraints:
+    for constraint in constraints:
         row = np.zeros(num_vars)
-        for idx, weight in coeffs:
+        for idx, weight in constraint.coeffs:
             row[idx] = weight
-        if _ == "implies":
+        if constraint.sense == "le":
             A_ub.append(row)
-            b_ub.append(rhs)
+            b_ub.append(constraint.rhs)
+        elif constraint.sense == "eq":
+            A_eq.append(row)
+            b_eq.append(constraint.rhs)
         else:
-            # equality via two inequalities
-            A_ub.append(row)
-            b_ub.append(rhs)
-            A_ub.append(-row)
-            b_ub.append(-rhs)
+            raise ValueError(f"Unsupported LP constraint sense: {constraint.sense}")
+
+    A_eq_arr = np.array(A_eq) if A_eq else None
+    b_eq_arr = np.array(b_eq) if b_eq else None
 
     bounds = [(0.0, 1.0)] * n + [(0.0, None)] * (2 * n)
     result = linprog(
@@ -269,16 +330,10 @@ def _solve_l1_repair(
 
 
 def _derived_values_sql(rows: list[dict[str, Any]]) -> str:
-    values = ", ".join(
-        "("
-        f"'{q(row['src_node_id'])}', '{q(row['dst_node_id'])}', '{q(row['edge_type'])}', "
-        f"'{q(row['edge_basis'])}', {row['confidence']}, '{q(row['path'])}', '{q(row['evidence'])}'"
-        ")"
-        for row in rows
-    )
     return (
-        "SELECT * FROM (VALUES " + values + ") AS t("
-        "src_node_id, dst_node_id, edge_type, edge_basis, confidence, path, evidence)"
+        "SELECT * FROM (VALUES "
+        + values_rows_sql(rows, DERIVED_EDGE_COLUMNS)
+        + f") AS t({', '.join(DERIVED_EDGE_COLUMNS)})"
     )
 
 
@@ -288,36 +343,7 @@ def _write_table(
     table: str,
     rows: list[dict[str, Any]],
     columns: list[str],
+    empty_types: dict[str, str],
 ) -> None:
-    if rows:
-        values = ", ".join(
-            "(" + ", ".join(_lit(row.get(col)) for col in columns) + ")"
-            for row in rows
-        )
-        db.execute(f"CREATE TABLE {table} AS SELECT * FROM (VALUES {values}) AS t({', '.join(columns)})")
-    else:
-        nulls = ", ".join(f"NULL::{_duck_type(col)} AS {col}" for col in columns)
-        db.execute(f"CREATE TABLE {table} AS SELECT {nulls} WHERE false")
+    db.execute(create_table_from_rows_sql(table, rows, columns, empty_types))
     db.execute(f"COPY {table} TO '{q(path)}' (FORMAT PARQUET);")
-
-
-def _duck_type(col: str) -> str:
-    if col.endswith("_count"):
-        return "BIGINT"
-    if col in {"event_slug", "node_id", "solver_status"}:
-        return "VARCHAR"
-    return "DOUBLE"
-
-
-def _lit(value: Any) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, str):
-        return "'" + q(value) + "'"
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            return "1e308"
-        return repr(float(value))
-    if isinstance(value, int):
-        return str(value)
-    return repr(value)

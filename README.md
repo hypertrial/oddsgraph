@@ -11,8 +11,7 @@ trading system.
 ## Requirements
 
 - Python 3.11 or newer.
-- DuckDB, either as the Python package from `pyproject.toml` or as a `duckdb`
-  CLI on `PATH`.
+- DuckDB from the Python package dependency in `pyproject.toml`.
 - A parquet input with the schema described in
   [wc2026_token_minutely_odds_20260702T070755Z.md](wc2026_token_minutely_odds_20260702T070755Z.md).
 
@@ -27,13 +26,6 @@ From the repo root:
 
 ```bash
 python -m pip install -e ".[dev]"
-```
-
-If you do not install the Python `duckdb` package, make sure the DuckDB CLI is
-available:
-
-```bash
-duckdb --version
 ```
 
 ## Build Artifacts
@@ -159,8 +151,7 @@ Generated markdown reports are written to `output/wc2026/reports/`, including
 
 ## Troubleshooting
 
-- `DuckDB is required`: install the Python package with `python -m pip install -e ".[dev]"`
-  or put the DuckDB CLI on `PATH`.
+- `DuckDB is required`: install the Python package with `python -m pip install -e ".[dev]"`.
 - `Input parquet missing required columns`: compare the input with
   [wc2026_token_minutely_odds_20260702T070755Z.md](wc2026_token_minutely_odds_20260702T070755Z.md).
   The build expects uppercase `ODDS_TIMESTAMP` and `ODDS_TIMESTAMP_EPOCH`.

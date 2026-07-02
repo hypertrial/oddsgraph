@@ -6,6 +6,7 @@ from typing import Any
 
 from . import thresholds as T
 from .queries import DuckDB, q
+from .sql import create_table_from_rows_sql
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,73 @@ class EffectiveThresholds:
     exclusion_current_sum_max: float
     complement_current_gap_violation_min: float
     complement_mean_gap_violation_min: float
+
+
+CALIBRATION_COLUMNS = [
+    "bucket_id",
+    "volume_min",
+    "volume_max",
+    "sample_count",
+    "complement_p50",
+    "complement_p95",
+    "equivalence_p95",
+    "implication_p95",
+    "exclusion_p95",
+]
+
+CALIBRATION_EMPTY_TYPES = {
+    "bucket_id": "INTEGER",
+    "volume_min": "DOUBLE",
+    "volume_max": "DOUBLE",
+    "sample_count": "BIGINT",
+    "complement_p50": "DOUBLE",
+    "complement_p95": "DOUBLE",
+    "equivalence_p95": "DOUBLE",
+    "implication_p95": "DOUBLE",
+    "exclusion_p95": "DOUBLE",
+}
+
+SCORED_EDGE_COLUMNS = [
+    "src_node_id",
+    "dst_node_id",
+    "candidate_type",
+    "edge_type",
+    "edge_basis",
+    "confidence",
+    "score",
+    "violation_score",
+    "overlap_minutes",
+    "current_p_src",
+    "current_p_dst",
+    "mean_p_src",
+    "mean_p_dst",
+    "market_id_src",
+    "market_id_dst",
+    "event_slug_src",
+    "event_slug_dst",
+    "evidence",
+]
+
+SCORED_EDGE_EMPTY_TYPES = {
+    "src_node_id": "VARCHAR",
+    "dst_node_id": "VARCHAR",
+    "candidate_type": "VARCHAR",
+    "edge_type": "VARCHAR",
+    "edge_basis": "VARCHAR",
+    "confidence": "DOUBLE",
+    "score": "DOUBLE",
+    "violation_score": "DOUBLE",
+    "overlap_minutes": "BIGINT",
+    "current_p_src": "DOUBLE",
+    "current_p_dst": "DOUBLE",
+    "mean_p_src": "DOUBLE",
+    "mean_p_dst": "DOUBLE",
+    "market_id_src": "VARCHAR",
+    "market_id_dst": "VARCHAR",
+    "event_slug_src": "VARCHAR",
+    "event_slug_dst": "VARCHAR",
+    "evidence": "VARCHAR",
+}
 
 
 def default_thresholds() -> EffectiveThresholds:
@@ -107,13 +175,12 @@ def fit_calibration(db: DuckDB, out_dir: Path) -> tuple[list[dict[str, Any]], Ef
         complement_mean_gap_violation_min=max(T.COMPLEMENT_MEAN_GAP_VIOLATION_MIN, mid_p50),
     )
 
-    db.execute("CREATE TABLE calibration_v AS SELECT * FROM (VALUES " + _values_sql(calibration_rows) + ") AS t(bucket_id, volume_min, volume_max, sample_count, complement_p50, complement_p95, equivalence_p95, implication_p95, exclusion_p95)" if calibration_rows else """
-        CREATE TABLE calibration_v AS
-        SELECT 1::INTEGER AS bucket_id, 0.0::DOUBLE AS volume_min, 0.0::DOUBLE AS volume_max,
-            0::BIGINT AS sample_count, 0.0::DOUBLE AS complement_p50, 0.0::DOUBLE AS complement_p95,
-            0.0::DOUBLE AS equivalence_p95, 0.0::DOUBLE AS implication_p95, 0.0::DOUBLE AS exclusion_p95
-        WHERE false
-    """)
+    db.execute(create_table_from_rows_sql(
+        "calibration_v",
+        calibration_rows,
+        CALIBRATION_COLUMNS,
+        CALIBRATION_EMPTY_TYPES,
+    ))
     db.execute(f"COPY calibration_v TO '{q(out_dir / 'calibration.parquet')}' (FORMAT PARQUET);")
     return calibration_rows, effective
 
@@ -134,6 +201,7 @@ def apply_calibration_confidence(db: DuckDB, effective: EffectiveThresholds) -> 
         SELECT
             s.src_node_id,
             s.dst_node_id,
+            s.candidate_type,
             s.edge_type,
             s.edge_basis,
             s.overlap_minutes,
@@ -148,8 +216,7 @@ def apply_calibration_confidence(db: DuckDB, effective: EffectiveThresholds) -> 
             s.event_slug_src,
             s.event_slug_dst,
             s.evidence,
-            c.candidate_type,
-            CASE c.candidate_type
+            CASE s.candidate_type
                 WHEN 'complement' THEN s.complement_error_raw
                 WHEN 'equivalence' THEN s.equivalence_error_raw
                 WHEN 'implication' THEN s.implication_violation_raw
@@ -157,7 +224,6 @@ def apply_calibration_confidence(db: DuckDB, effective: EffectiveThresholds) -> 
                 ELSE NULL
             END AS observed_error
         FROM scored_edges_v s
-        JOIN candidate_edges_v c USING (src_node_id, dst_node_id)
     """)
 
     updated: list[dict[str, Any]] = []
@@ -175,11 +241,7 @@ def apply_calibration_confidence(db: DuckDB, effective: EffectiveThresholds) -> 
         updated.append({**row, "confidence": confidence})
 
     db.execute("DROP TABLE IF EXISTS scored_edges_v")
-    _load_rows(db, "scored_edges_v", updated, [
-        "src_node_id", "dst_node_id", "edge_type", "edge_basis", "confidence", "score",
-        "violation_score", "overlap_minutes", "current_p_src", "current_p_dst", "mean_p_src",
-        "mean_p_dst", "market_id_src", "market_id_dst", "event_slug_src", "event_slug_dst", "evidence",
-    ])
+    _load_rows(db, "scored_edges_v", updated, SCORED_EDGE_COLUMNS, SCORED_EDGE_EMPTY_TYPES)
     _rebuild_edge_tables(db, effective)
 
 
@@ -243,33 +305,11 @@ def _quantile(values: list[float], q: float) -> float:
     return ordered[idx]
 
 
-def _values_sql(rows: list[dict[str, Any]]) -> str:
-    parts = []
-    for row in rows:
-        parts.append(
-            f"({row['bucket_id']}, {row['volume_min']}, {row['volume_max']}, {row['sample_count']}, "
-            f"{row['complement_p50']}, {row['complement_p95']}, {row['equivalence_p95']}, "
-            f"{row['implication_p95']}, {row['exclusion_p95']})"
-        )
-    return ", ".join(parts)
-
-
-def _load_rows(db: DuckDB, table: str, rows: list[dict[str, Any]], columns: list[str]) -> None:
-    if not rows:
-        db.execute(f"CREATE TABLE {table} AS SELECT {', '.join('NULL::VARCHAR AS ' + c for c in columns)} WHERE false")
-        return
-    values = ", ".join(
-        "(" + ", ".join(_sql_literal(row.get(col)) for col in columns) + ")"
-        for row in rows
-    )
-    db.execute(f"CREATE TABLE {table} AS SELECT * FROM (VALUES {values}) AS t({', '.join(columns)})")
-
-
-def _sql_literal(value: Any) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, str):
-        return "'" + q(value) + "'"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
+def _load_rows(
+    db: DuckDB,
+    table: str,
+    rows: list[dict[str, Any]],
+    columns: list[str],
+    empty_types: dict[str, str],
+) -> None:
+    db.execute(create_table_from_rows_sql(table, rows, columns, empty_types))
