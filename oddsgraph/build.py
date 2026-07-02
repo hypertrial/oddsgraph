@@ -6,6 +6,7 @@ from pathlib import Path
 from .queries import DuckDB, q
 from .reports import write_reports
 from .schema import validate_input
+from . import thresholds as T
 
 
 def build(input_path: Path, out_dir: Path) -> dict[str, str | int | float | None]:
@@ -223,7 +224,7 @@ def _write_market_groups(db: DuckDB, out_dir: Path) -> None:
 
 def _write_candidates(db: DuckDB, out_dir: Path) -> None:
     db.execute(
-        """
+        f"""
         CREATE TABLE candidate_edges_v AS
         WITH same_market AS (
             SELECT
@@ -244,8 +245,8 @@ def _write_candidates(db: DuckDB, out_dir: Path) -> None:
         eligible AS (
             SELECT *
             FROM nodes_v
-            WHERE market_volume_usd >= 10000
-                AND active_minutes >= 1000
+            WHERE market_volume_usd >= {T.MIN_MARKET_VOLUME_USD}
+                AND active_minutes >= {T.MIN_ACTIVE_MINUTES}
                 AND outcome_label = 'Yes'
         ),
         cross_market AS (
@@ -320,7 +321,7 @@ def _write_candidates(db: DuckDB, out_dir: Path) -> None:
 
 def _score_edges(db: DuckDB, out_dir: Path) -> None:
     db.execute(
-        """
+        f"""
         CREATE TABLE aligned_edges AS
         WITH pairs AS (
             SELECT DISTINCT src_node_id, dst_node_id
@@ -348,8 +349,8 @@ def _score_edges(db: DuckDB, out_dir: Path) -> None:
                 avg(p_dst) AS mean_p_dst,
                 avg(abs(p_src + p_dst - 1)) AS complement_error,
                 avg(abs(p_src - p_dst)) AS equivalence_error,
-                avg(greatest(0, p_src - p_dst - 0.01)) AS implication_violation,
-                avg(greatest(0, p_src + p_dst - 1 - 0.01)) AS exclusion_violation
+                avg(greatest(0, p_src - p_dst - {T.IMPLICATION_EPSILON})) AS implication_violation,
+                avg(greatest(0, p_src + p_dst - 1 - {T.EXCLUSION_EPSILON})) AS exclusion_violation
             FROM aligned
             GROUP BY 1, 2
         )
@@ -388,7 +389,7 @@ def _score_edges(db: DuckDB, out_dir: Path) -> None:
                 ELSE 'related'
             END AS edge_type,
             CASE
-                WHEN c.candidate_type = 'complement' AND s.overlap_minutes < 10 THEN 0.5
+                WHEN c.candidate_type = 'complement' AND s.overlap_minutes < {T.COMPLEMENT_LOW_OVERLAP_MINUTES} THEN 0.5
                 WHEN c.candidate_type = 'complement' THEN coalesce(greatest(0, 1 - 20 * s.complement_error), 0.5)
                 WHEN c.candidate_type = 'equivalence' THEN greatest(0, 1 - 20 * s.equivalence_error)
                 WHEN c.candidate_type = 'implication' THEN greatest(0, 1 - 50 * s.implication_violation)
@@ -404,7 +405,7 @@ def _score_edges(db: DuckDB, out_dir: Path) -> None:
             END AS score,
             CASE
                 WHEN c.candidate_type = 'complement' THEN s.complement_error
-                WHEN c.candidate_type = 'equivalence' THEN greatest(0, s.equivalence_error - 0.02)
+                WHEN c.candidate_type = 'equivalence' THEN greatest(0, s.equivalence_error - {T.EQUIVALENCE_MEAN_ABS_DIFF_MAX})
                 WHEN c.candidate_type = 'implication' THEN s.implication_violation
                 WHEN c.candidate_type = 'mutual_exclusion' THEN s.exclusion_violation
                 ELSE NULL
@@ -432,21 +433,21 @@ def _score_edges(db: DuckDB, out_dir: Path) -> None:
             (c.candidate_type = 'complement')
             OR (
                 c.candidate_type = 'equivalence'
-                AND s.overlap_minutes >= 1000
-                AND s.equivalence_error <= 0.02
-                AND abs(p.current_p_src - p.current_p_dst) <= 0.03
+                AND s.overlap_minutes >= {T.MIN_OVERLAP_MINUTES}
+                AND s.equivalence_error <= {T.EQUIVALENCE_MEAN_ABS_DIFF_MAX}
+                AND abs(p.current_p_src - p.current_p_dst) <= {T.EQUIVALENCE_CURRENT_ABS_DIFF_MAX}
             )
             OR (
                 c.candidate_type = 'implication'
-                AND s.overlap_minutes >= 1000
-                AND s.implication_violation <= 0.005
-                AND p.current_p_src <= p.current_p_dst + 0.02
+                AND s.overlap_minutes >= {T.MIN_OVERLAP_MINUTES}
+                AND s.implication_violation <= {T.IMPLICATION_VIOLATION_MEAN_MAX}
+                AND p.current_p_src <= p.current_p_dst + {T.IMPLICATION_CURRENT_SLACK}
             )
             OR (
                 c.candidate_type = 'mutual_exclusion'
-                AND s.overlap_minutes >= 1000
-                AND s.exclusion_violation <= 0.005
-                AND p.current_p_src + p.current_p_dst <= 1.02
+                AND s.overlap_minutes >= {T.MIN_OVERLAP_MINUTES}
+                AND s.exclusion_violation <= {T.EXCLUSION_VIOLATION_MEAN_MAX}
+                AND p.current_p_src + p.current_p_dst <= {T.EXCLUSION_CURRENT_SUM_MAX}
             );
         """
     )
@@ -629,7 +630,10 @@ def _write_violations(db: DuckDB, out_dir: Path) -> None:
             JOIN aligned_edges s USING (src_node_id, dst_node_id)
             JOIN current_pair_prices p USING (src_node_id, dst_node_id)
             WHERE c.candidate_type = 'complement'
-                AND (abs(p.current_p_src + p.current_p_dst - 1) >= 0.02 OR s.complement_error >= 0.01)
+                    AND (
+                        abs(p.current_p_src + p.current_p_dst - 1) >= {T.COMPLEMENT_CURRENT_GAP_VIOLATION_MIN}
+                        OR s.complement_error >= {T.COMPLEMENT_MEAN_GAP_VIOLATION_MIN}
+                    )
         ),
         edge_violations AS (
             SELECT
@@ -650,9 +654,9 @@ def _write_violations(db: DuckDB, out_dir: Path) -> None:
                 evidence AS description
             FROM logic_edges_v
             WHERE
-                (edge_type = 'equivalent' AND abs(current_p_src - current_p_dst) > 0.03)
-                OR (edge_type = 'implies' AND current_p_src > current_p_dst + 0.02)
-                OR (edge_type = 'mutually_exclusive' AND current_p_src + current_p_dst > 1.02)
+                (edge_type = 'equivalent' AND abs(current_p_src - current_p_dst) > {T.EQUIVALENCE_CURRENT_ABS_DIFF_MAX})
+                OR (edge_type = 'implies' AND current_p_src > current_p_dst + {T.IMPLICATION_CURRENT_SLACK})
+                OR (edge_type = 'mutually_exclusive' AND current_p_src + current_p_dst > {T.EXCLUSION_CURRENT_SUM_MAX})
         )
         SELECT
             'complement:' || src_node_id || ':' || dst_node_id AS violation_id,

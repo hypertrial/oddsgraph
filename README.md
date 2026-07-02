@@ -126,3 +126,9 @@ Generated markdown reports are written to `output/wc2026/reports/`.
 pytest -q
 python -m oddsgraph.cli --help
 ```
+
+To run optional checks against an existing full WC2026 build:
+
+```bash
+pytest -q -m full_output
+```

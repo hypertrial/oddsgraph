@@ -107,20 +107,24 @@ The build also writes markdown files under `reports/`:
 
 ## Scoring Thresholds
 
-Current v0.1.0 thresholds are hard-coded in the build SQL:
+Current v0.1.0 thresholds live in `oddsgraph/thresholds.py` and are rendered
+into the build SQL:
 
-- Cross-market candidates require both markets to have `market_volume_usd >= 10000`,
-  `active_minutes >= 1000`, matching `event_slug`, and `outcome_label = 'Yes'`.
-- Cross-market accepted edges require `overlap_minutes >= 1000`.
-- Equivalence accepts when `mean(abs(p_src - p_dst)) <= 0.02` and current
-  absolute difference is `<= 0.03`.
-- Implication accepts when `mean(max(0, p_src - p_dst - 0.01)) <= 0.005` and
-  current `p_src <= p_dst + 0.02`.
-- Mutual exclusion accepts when `mean(max(0, p_src + p_dst - 1 - 0.01)) <= 0.005`
-  and current `p_src + p_dst <= 1.02`.
+- Cross-market candidates require both markets to have
+  `MIN_MARKET_VOLUME_USD = 10000`, `MIN_ACTIVE_MINUTES = 1000`, matching
+  `event_slug`, and `outcome_label = 'Yes'`.
+- Cross-market accepted edges require `MIN_OVERLAP_MINUTES = 1000`.
+- Equivalence accepts when `EQUIVALENCE_MEAN_ABS_DIFF_MAX = 0.02` and
+  `EQUIVALENCE_CURRENT_ABS_DIFF_MAX = 0.03`.
+- Implication uses `IMPLICATION_EPSILON = 0.01`,
+  `IMPLICATION_VIOLATION_MEAN_MAX = 0.005`, and
+  `IMPLICATION_CURRENT_SLACK = 0.02`.
+- Mutual exclusion uses `EXCLUSION_EPSILON = 0.01`,
+  `EXCLUSION_VIOLATION_MEAN_MAX = 0.005`, and
+  `EXCLUSION_CURRENT_SUM_MAX = 1.02`.
 - Complement candidates are always emitted for same-market token pairs.
-  Confidence is lower when overlap is below 10 minutes.
-- Complement violations are emitted when current gap is `>= 0.02` or mean gap is
-  `>= 0.01`.
+  Confidence is lower when overlap is below `COMPLEMENT_LOW_OVERLAP_MINUTES = 10`.
+- Complement violations use `COMPLEMENT_CURRENT_GAP_VIOLATION_MIN = 0.02` and
+  `COMPLEMENT_MEAN_GAP_VIOLATION_MIN = 0.01`.
 
 These thresholds favor precision over coverage in the MVP.

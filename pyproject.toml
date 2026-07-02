@@ -22,3 +22,6 @@ include = ["oddsgraph*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+  "full_output: checks that require existing output/wc2026 artifacts",
+]
