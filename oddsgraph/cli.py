@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 
 from .build import build
-from .queries import DuckDB, q
-from .search import resolve_node, search_nodes
+from .queries import q
+from .search import read_rows, resolve_node, search_nodes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
             for key, value in stats.items():
                 print(f"{key}: {value}")
         elif args.cmd == "nodes":
-            _print_rows(_artifact_rows(args.out, "nodes.parquet", f"""
+            _print_rows(read_rows(args.out, "nodes.parquet", f"""
                 SELECT node_id, market_id, outcome_label, current_price, canonical_proposition
                 FROM read_parquet('{{path}}')
                 ORDER BY market_volume_usd DESC, current_price DESC NULLS LAST
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
             """))
         elif args.cmd == "edges":
             edge_filter = f"WHERE edge_type = '{q(args.edge_type)}'" if args.edge_type else ""
-            _print_rows(_artifact_rows(args.out, "logic_edges.parquet", f"""
+            _print_rows(read_rows(args.out, "logic_edges.parquet", f"""
                 SELECT edge_type, edge_basis, confidence, score, overlap_minutes, src_node_id, dst_node_id
                 FROM read_parquet('{{path}}')
                 {edge_filter}
@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             """))
         elif args.cmd == "price-edges":
             edge_filter = f"WHERE edge_type = '{q(args.edge_type)}'" if args.edge_type else ""
-            _print_rows(_artifact_rows(args.out, "price_edges.parquet", f"""
+            _print_rows(read_rows(args.out, "price_edges.parquet", f"""
                 SELECT edge_type, edge_basis, confidence, score, overlap_minutes, src_node_id, dst_node_id
                 FROM read_parquet('{{path}}')
                 {edge_filter}
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
                 LIMIT {args.top}
             """))
         elif args.cmd == "violations":
-            _print_rows(_artifact_rows(args.out, "violations.parquet", f"""
+            _print_rows(read_rows(args.out, "violations.parquet", f"""
                 SELECT violation_type, severity, current_gap, mean_gap, src_node_id, dst_node_id
                 FROM read_parquet('{{path}}')
                 ORDER BY current_gap DESC, mean_gap DESC
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             b = resolve_node(args.out, args.b, require_unique=True)
             if not a or not b:
                 raise ValueError("Could not resolve both nodes")
-            _print_rows(_artifact_rows(args.out, "conditional_edges.parquet", f"""
+            _print_rows(read_rows(args.out, "conditional_edges.parquet", f"""
                 SELECT *
                 FROM read_parquet('{{path}}')
                 WHERE a_node_id = '{q(a)}' AND b_node_id = '{q(b)}'
@@ -100,14 +100,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0
-
-
-def _artifact_rows(out_dir: Path, artifact: str, sql: str) -> list[dict[str, object]]:
-    db = DuckDB()
-    try:
-        return db.rows(sql.format(path=q(out_dir / artifact)))
-    finally:
-        db.close()
 
 
 def _print_rows(rows: list[dict[str, object]]) -> None:
