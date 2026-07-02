@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 from scipy.optimize import linprog
+from scipy.sparse import csr_matrix
 
 from . import thresholds as T
 from .queries import DuckDB, q
@@ -196,6 +197,21 @@ def solve_event_coherence(db: DuckDB, out_dir: Path) -> list[str]:
     return warnings
 
 
+def create_empty_coherence_tables(db: DuckDB) -> None:
+    db.execute(create_table_from_rows_sql(
+        "coherence_v",
+        [],
+        COHERENCE_COLUMNS,
+        COHERENCE_EMPTY_TYPES,
+    ))
+    db.execute(create_table_from_rows_sql(
+        "coherence_repairs_v",
+        [],
+        REPAIR_COLUMNS,
+        REPAIR_EMPTY_TYPES,
+    ))
+
+
 def _collect_constraints(db: DuckDB, model: EventModel) -> list[LpConstraint]:
     constraints: list[LpConstraint] = []
     slug = q(model.event_slug)
@@ -285,37 +301,46 @@ def _solve_l1_repair(
     c[n:2 * n] = 1.0
     c[2 * n:] = 1.0
 
-    A_eq = []
+    eq_rows: list[int] = []
+    eq_cols: list[int] = []
+    eq_data: list[float] = []
     b_eq = []
     for i in range(n):
-        row = np.zeros(num_vars)
-        row[i] = 1.0
-        row[n + i] = -1.0
-        row[2 * n + i] = 1.0
-        A_eq.append(row)
+        row_idx = len(b_eq)
+        eq_rows.extend([row_idx, row_idx, row_idx])
+        eq_cols.extend([i, n + i, 2 * n + i])
+        eq_data.extend([1.0, -1.0, 1.0])
         b_eq.append(model.observed[i])
-    A_ub = []
+    ub_rows: list[int] = []
+    ub_cols: list[int] = []
+    ub_data: list[float] = []
     b_ub = []
     for constraint in constraints:
-        row = np.zeros(num_vars)
-        for idx, weight in constraint.coeffs:
-            row[idx] = weight
         if constraint.sense == "le":
-            A_ub.append(row)
+            row_idx = len(b_ub)
+            for idx, weight in constraint.coeffs:
+                ub_rows.append(row_idx)
+                ub_cols.append(idx)
+                ub_data.append(weight)
             b_ub.append(constraint.rhs)
         elif constraint.sense == "eq":
-            A_eq.append(row)
+            row_idx = len(b_eq)
+            for idx, weight in constraint.coeffs:
+                eq_rows.append(row_idx)
+                eq_cols.append(idx)
+                eq_data.append(weight)
             b_eq.append(constraint.rhs)
         else:
             raise ValueError(f"Unsupported LP constraint sense: {constraint.sense}")
 
-    A_eq_arr = np.array(A_eq) if A_eq else None
+    A_eq_arr = csr_matrix((eq_data, (eq_rows, eq_cols)), shape=(len(b_eq), num_vars)) if b_eq else None
+    A_ub_arr = csr_matrix((ub_data, (ub_rows, ub_cols)), shape=(len(b_ub), num_vars)) if b_ub else None
     b_eq_arr = np.array(b_eq) if b_eq else None
 
     bounds = [(0.0, 1.0)] * n + [(0.0, None)] * (2 * n)
     result = linprog(
         c,
-        A_ub=np.array(A_ub) if A_ub else None,
+        A_ub=A_ub_arr,
         b_ub=np.array(b_ub) if b_ub else None,
         A_eq=A_eq_arr,
         b_eq=b_eq_arr,

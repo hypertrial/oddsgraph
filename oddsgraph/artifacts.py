@@ -101,10 +101,21 @@ ARTIFACT_COLUMNS = {
 }
 
 
-def parquet_artifacts(*, has_evaluation: bool) -> tuple[str, ...]:
+def parquet_artifacts(
+    *,
+    has_evaluation: bool,
+    has_prices: bool = True,
+    has_coherence: bool = True,
+) -> tuple[str, ...]:
+    artifacts = list(PARQUET_ARTIFACTS)
+    if not has_prices:
+        artifacts.remove("prices.parquet")
+    if not has_coherence:
+        artifacts.remove("coherence.parquet")
+        artifacts.remove("coherence_repairs.parquet")
     if has_evaluation:
-        return (*PARQUET_ARTIFACTS, *OPTIONAL_PARQUET_ARTIFACTS)
-    return PARQUET_ARTIFACTS
+        artifacts.extend(OPTIONAL_PARQUET_ARTIFACTS)
+    return tuple(artifacts)
 
 
 def reports(*, has_evaluation: bool) -> tuple[str, ...]:

@@ -120,6 +120,18 @@ def test_build_outputs_artifacts_and_core_logic(synthetic_output: Path) -> None:
         """))
         assert current_sum == pytest.approx(1.0)
 
+        market_groups = db.rows(f"""
+            SELECT num_tokens, token_ids, outcome_labels
+            FROM read_parquet('{q(synthetic_output / "market_groups.parquet")}')
+        """)
+        for row in market_groups:
+            token_ids = row["token_ids"]
+            outcome_labels = row["outcome_labels"]
+            assert len(token_ids) == row["num_tokens"]
+            assert len(outcome_labels) == row["num_tokens"]
+            assert len(set(token_ids)) == len(token_ids)
+            assert len(set(outcome_labels)) == len(outcome_labels)
+
         duplicate_candidates = int(db.scalar(f"""
             SELECT count(*)
             FROM (
@@ -235,6 +247,7 @@ def test_build_manifest_marks_success(synthetic_output: Path) -> None:
     assert manifest["stats"]["tokens"] > 0
     assert manifest["taxonomy"]["name"] == "wc2026"
     assert manifest["effective_thresholds"] is not None
+    assert manifest["build_options"] == {"solve_coherence": True, "write_prices": True}
     assert "reports/summary.md" in manifest["reports"]
     assert "reports/coverage.md" in manifest["reports"]
     db = DuckDB()
@@ -301,6 +314,81 @@ def test_evaluation_with_resolutions(synthetic_input: Path, tmp_path: Path) -> N
         assert [row["column_name"] for row in rows] == ARTIFACT_COLUMNS["evaluation.parquet"]
     finally:
         db.close()
+
+
+def test_build_can_skip_prices_and_keep_query_artifacts(
+    synthetic_input: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = tmp_path / "out"
+    build(synthetic_input, out, write_prices=False)
+
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    assert manifest["build_options"]["write_prices"] is False
+    assert "prices.parquet" not in manifest["artifacts"]
+    assert not (out / "prices.parquet").exists()
+
+    assert main(["search", "--out", str(out), "--query", "Equivalent A"]) == 0
+    assert "Will Equivalent A happen?" in capsys.readouterr().out
+    assert main(["nodes", "--out", str(out), "--top", "3"]) == 0
+    assert "node_id" in capsys.readouterr().out
+    assert main(["edges", "--out", str(out), "--top", "3"]) == 0
+    assert "edge_type" in capsys.readouterr().out
+    assert main(["explain", "--out", str(out), "--node", "comp:Yes"]) == 0
+    assert "Same-Market Constraint" in capsys.readouterr().out
+
+
+def test_build_can_skip_coherence_and_keep_conditionals(
+    synthetic_input: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = tmp_path / "out"
+    build(synthetic_input, out, solve_coherence=False)
+
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    assert manifest["build_options"]["solve_coherence"] is False
+    assert "coherence.parquet" not in manifest["artifacts"]
+    assert "coherence_repairs.parquet" not in manifest["artifacts"]
+    assert not (out / "coherence.parquet").exists()
+    assert not (out / "coherence_repairs.parquet").exists()
+
+    db = DuckDB()
+    try:
+        global_violations = int(db.scalar(f"""
+            SELECT count(*)
+            FROM read_parquet('{q(out / "violations.parquet")}')
+            WHERE violation_type = 'global_incoherence'
+        """))
+        assert global_violations == 0
+    finally:
+        db.close()
+
+    assert main(["violations", "--out", str(out), "--top", "5"]) == 0
+    assert "violation_type" in capsys.readouterr().out
+    assert main(["condition", "--out", str(out), "--a", "comp:Yes", "--b", "comp:No"]) == 0
+    assert "exact_complement" in capsys.readouterr().out
+
+
+def test_cli_build_can_skip_prices_and_coherence(synthetic_input: Path, tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    assert main([
+        "build",
+        "--input", str(synthetic_input),
+        "--out", str(out),
+        "--skip-prices",
+        "--skip-coherence",
+    ]) == 0
+
+    manifest = json.loads((out / "build_manifest.json").read_text())
+    assert manifest["build_options"] == {"solve_coherence": False, "write_prices": False}
+    assert "prices.parquet" not in manifest["artifacts"]
+    assert "coherence.parquet" not in manifest["artifacts"]
+    assert "coherence_repairs.parquet" not in manifest["artifacts"]
+    assert not (out / "prices.parquet").exists()
+    assert not (out / "coherence.parquet").exists()
+    assert not (out / "coherence_repairs.parquet").exists()
 
 
 def test_failed_build_removes_success_manifest(tmp_path: Path) -> None:

@@ -49,6 +49,17 @@ python -m oddsgraph.cli build \
   --out output/wc2026
 ```
 
+For graph inspection runs where archival minute prices or global LP coherence
+are not needed, skip the expensive optional artifacts explicitly:
+
+```bash
+python -m oddsgraph.cli build \
+  --input wc2026_token_minutely_odds_20260702T070755Z.parquet \
+  --out output/wc2026-fast \
+  --skip-prices \
+  --skip-coherence
+```
+
 On the local WC2026 file, the full build rewrites minute-level `prices.parquet`
 and usually takes about 5 minutes on this machine (LP coherence adds per-event
 solve time). The output directory is recreated in place for the DuckDB working
@@ -162,7 +173,8 @@ Generated markdown reports are written to `output/wc2026/reports/`, including
   53,827,798 rows, so `prices.parquet` dominates runtime and disk I/O. Pair
   scoring uses a 30-day lookback window (`SCORING_LOOKBACK_DAYS` in
   `thresholds.py`) so year-long feeds do not materialize full pair-minute
-  history.
+  history. Use the full default build for archival/research output; use
+  `--skip-prices` and/or `--skip-coherence` for faster graph inspection.
 - `violations` returns rows: strict semantic edges can still have current prices
   that contradict the relationship. Inspect the row before treating it as data
   corruption.

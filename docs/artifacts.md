@@ -18,6 +18,16 @@ completion marker for a coherent output directory.
 - `--taxonomy path.json`: event taxonomy for stage progression and single-winner
   families. Defaults to bundled `oddsgraph/taxonomies/wc2026.json`.
 
+## Optional Outputs
+
+- `--skip-prices`: omits `prices.parquet`. Graph artifacts, reports, and query
+  commands that read nodes/edges/violations/conditionals still work.
+- `--skip-coherence`: omits `coherence.parquet` and
+  `coherence_repairs.parquet`. Conditional rows fall back to current pair prices,
+  and violations omit `global_incoherence` rows.
+- Skipped artifacts are intentionally absent and are not listed in
+  `build_manifest.json`.
+
 ## Generated Parquet Files
 
 ### `nodes.parquet`
@@ -30,7 +40,7 @@ completion marker for a coherent output directory.
   `active_minutes`, `current_price`, `current_price_devig`, `mean_price`,
   `mean_price_devig`, `min_price`, `max_price`.
 
-### `prices.parquet`
+### `prices.parquet` (optional with `--skip-prices`)
 
 - Grain: one row per `(node_id, odds_minute_epoch)` after deduplication.
 - Purpose: minute-level price series with devig and scoring prices.
@@ -86,12 +96,12 @@ completion marker for a coherent output directory.
 
 - Empirical complement-noise buckets by liquidity and derived threshold quantiles.
 
-### `coherence.parquet`
+### `coherence.parquet` (optional with `--skip-coherence`)
 
 - Per `event_slug` LP repair summary: node count, constraint count,
   `incoherence_distance`, `solver_status`.
 
-### `coherence_repairs.parquet`
+### `coherence_repairs.parquet` (optional with `--skip-coherence`)
 
 - Per-node observed vs repaired prices from the event-level L1 coherence solve.
 
@@ -116,5 +126,7 @@ completion marker for a coherent output directory.
 
 ## Manifest
 
-`build_manifest.json` records input paths, taxonomy hash, effective thresholds,
-LP warnings, generated artifacts/reports, and summary stats.
+`build_manifest.json` records input paths, build options, taxonomy hash,
+effective thresholds, LP warnings, generated artifacts/reports, and summary
+stats. Its artifact list is the contract for that build, so omitted optional
+artifacts are not validation failures.

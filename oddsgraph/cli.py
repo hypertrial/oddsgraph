@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--quotes", type=Path, default=None)
     p.add_argument("--resolutions", type=Path, default=None)
     p.add_argument("--taxonomy", type=Path, default=None)
+    p.add_argument("--skip-prices", action="store_true")
+    p.add_argument("--skip-coherence", action="store_true")
 
     p = sub.add_parser("nodes")
     p.add_argument("--out", required=True, type=Path)
@@ -83,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
                 quotes_path=args.quotes,
                 resolutions_path=args.resolutions,
                 taxonomy_path=args.taxonomy,
+                write_prices=not args.skip_prices,
+                solve_coherence=not args.skip_coherence,
             )
             for key, value in stats.items():
                 print(f"{key}: {value}")

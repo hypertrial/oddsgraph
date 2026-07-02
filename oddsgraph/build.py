@@ -13,12 +13,12 @@ from .artifacts import ARTIFACT_COLUMNS, FINAL_EDGE_ARTIFACT_TABLES, REPORTS, pa
 from ._diagnostic_stages import write_conditionals, write_constraints, write_violations
 from ._edge_stages import score_edges, write_candidates
 from .calibration import apply_calibration_confidence, fit_calibration, thresholds_as_dict
-from .coherence import compute_transitive_closure, solve_event_coherence
+from .coherence import compute_transitive_closure, create_empty_coherence_tables, solve_event_coherence
 from .evaluate import run_evaluation
 from .queries import DuckDB, q
 from .reports import write_reports
 from .rules import Taxonomy, load_taxonomy, single_winner_pattern_sql, single_winner_values_sql, stage_rules_values_sql
-from .schema import validate_input
+from .schema import validate_input_schema, validate_input_table
 
 
 def _stage(name: str, fn: Callable[[], T_]) -> T_:
@@ -36,6 +36,8 @@ def build(
     quotes_path: Path | None = None,
     resolutions_path: Path | None = None,
     taxonomy_path: Path | None = None,
+    write_prices: bool = True,
+    solve_coherence: bool = True,
 ) -> dict[str, str | int | float | None]:
     start = time.time()
     taxonomy = load_taxonomy(taxonomy_path)
@@ -46,9 +48,12 @@ def build(
     effective_thresholds = None
     lp_warnings: list[str] = []
     try:
-        _stage("validate_input", lambda: validate_input(db, input_path))
-        _stage("create_views", lambda: _create_views(db, input_path, taxonomy, quotes_path))
-        _stage("write_prices", lambda: _write_prices(db, out_dir))
+        _stage("validate_input_schema", lambda: validate_input_schema(db, input_path))
+        _stage("create_input_prices", lambda: _create_input_prices(db, input_path))
+        _stage("validate_input", lambda: validate_input_table(db))
+        _stage("create_views", lambda: _create_views(db, taxonomy, quotes_path))
+        if write_prices:
+            _stage("write_prices", lambda: _write_prices(db, out_dir))
         _stage("write_nodes", lambda: _write_nodes(db, out_dir))
         _stage("write_market_groups", lambda: _write_market_groups(db, out_dir))
         _stage("write_candidates", lambda: write_candidates(db, out_dir))
@@ -59,7 +64,10 @@ def build(
         _stage("apply_calibration_confidence", lambda: apply_calibration_confidence(db, effective_thresholds))
         _stage("write_final_edges", lambda: _write_final_edges(db, out_dir))
         _stage("compute_transitive_closure", lambda: compute_transitive_closure(db, out_dir))
-        lp_warnings = _stage("solve_event_coherence", lambda: solve_event_coherence(db, out_dir))
+        if solve_coherence:
+            lp_warnings = _stage("solve_event_coherence", lambda: solve_event_coherence(db, out_dir))
+        else:
+            _stage("create_empty_coherence_tables", lambda: create_empty_coherence_tables(db))
         _stage("write_constraints", lambda: write_constraints(db, out_dir))
         _stage("write_conditionals", lambda: write_conditionals(db, out_dir))
         _stage("write_violations", lambda: write_violations(db, out_dir, effective_thresholds))
@@ -69,7 +77,13 @@ def build(
         _stage("write_reports", lambda: write_reports(db, out_dir, stats))
         _stage(
             "validate_generated_artifacts",
-            lambda: _validate_generated_artifacts(db, out_dir, has_evaluation=resolutions_path is not None),
+            lambda: _validate_generated_artifacts(
+                db,
+                out_dir,
+                has_evaluation=resolutions_path is not None,
+                has_prices=write_prices,
+                has_coherence=solve_coherence,
+            ),
         )
         _write_manifest(
             input_path,
@@ -81,6 +95,8 @@ def build(
             effective_thresholds=effective_thresholds,
             lp_warnings=lp_warnings,
             has_evaluation=resolutions_path is not None,
+            has_prices=write_prices,
+            has_coherence=solve_coherence,
         )
         return stats
     finally:
@@ -109,6 +125,8 @@ def _write_manifest(
     effective_thresholds: object | None,
     lp_warnings: list[str],
     has_evaluation: bool,
+    has_prices: bool,
+    has_coherence: bool,
 ) -> None:
     manifest = {
         "input": str(input_path),
@@ -121,7 +139,17 @@ def _write_manifest(
         },
         "effective_thresholds": thresholds_as_dict(effective_thresholds) if effective_thresholds else None,
         "lp_warnings": lp_warnings,
-        "artifacts": list(parquet_artifacts(has_evaluation=has_evaluation)),
+        "build_options": {
+            "write_prices": has_prices,
+            "solve_coherence": has_coherence,
+        },
+        "artifacts": list(
+            parquet_artifacts(
+                has_evaluation=has_evaluation,
+                has_prices=has_prices,
+                has_coherence=has_coherence,
+            )
+        ),
         "reports": list(reports(has_evaluation=has_evaluation)),
         "stats": stats,
     }
@@ -140,8 +168,19 @@ def _write_final_edges(db: DuckDB, out_dir: Path) -> None:
         _copy_table(db, out_dir, table, artifact)
 
 
-def _validate_generated_artifacts(db: DuckDB, out_dir: Path, *, has_evaluation: bool) -> None:
-    artifacts = parquet_artifacts(has_evaluation=has_evaluation)
+def _validate_generated_artifacts(
+    db: DuckDB,
+    out_dir: Path,
+    *,
+    has_evaluation: bool,
+    has_prices: bool = True,
+    has_coherence: bool = True,
+) -> None:
+    artifacts = parquet_artifacts(
+        has_evaluation=has_evaluation,
+        has_prices=has_prices,
+        has_coherence=has_coherence,
+    )
     missing = [name for name in artifacts if not (out_dir / name).exists()]
     if missing:
         raise RuntimeError("Missing generated artifacts: " + ", ".join(missing))
@@ -167,17 +206,11 @@ def _validate_generated_artifacts(db: DuckDB, out_dir: Path, *, has_evaluation: 
             )
 
 
-def _create_views(
-    db: DuckDB,
-    input_path: Path,
-    taxonomy: Taxonomy,
-    quotes_path: Path | None,
-) -> None:
+def _create_input_prices(db: DuckDB, input_path: Path) -> None:
     src = q(input_path)
-    quotes_sql = q(quotes_path) if quotes_path else None
     db.execute(
         f"""
-        CREATE VIEW input_prices AS
+        CREATE TEMP TABLE input_prices AS
         SELECT
             market_id,
             outcome_index,
@@ -195,6 +228,14 @@ def _create_views(
         FROM read_parquet('{src}');
         """
     )
+
+
+def _create_views(
+    db: DuckDB,
+    taxonomy: Taxonomy,
+    quotes_path: Path | None,
+) -> None:
+    quotes_sql = q(quotes_path) if quotes_path else None
     _stage(
         "  token_minute_prices",
         lambda: db.execute(
@@ -432,26 +473,47 @@ def _write_market_groups(db: DuckDB, out_dir: Path) -> None:
                 JOIN market_complete_epochs e
                     ON s.market_id = e.market_id
                     AND s.odds_minute_epoch = e.current_minute_epoch
+            ),
+            mean_sums AS (
+                SELECT market_id, avg(sum_price) AS mean_sum_price
+                FROM complete_sums
+                GROUP BY market_id
+            ),
+            node_groups AS (
+                SELECT
+                    market_id,
+                    any_value(event_slug) AS event_slug,
+                    any_value(question) AS question,
+                    any_value(market_family) AS market_family,
+                    any_value(expected_tokens) AS num_tokens,
+                    list(node_id ORDER BY outcome_index) AS token_ids,
+                    list(outcome_label ORDER BY outcome_index) AS outcome_labels,
+                    bool_or(is_active) AS is_active,
+                    bool_or(is_closed) AS is_closed,
+                    max(market_volume_usd) AS market_volume_usd,
+                    min(first_seen_ts) AS first_seen_ts,
+                    max(last_seen_ts) AS last_seen_ts
+                FROM nodes_v
+                GROUP BY market_id
             )
             SELECT
                 n.market_id,
-                any_value(n.event_slug) AS event_slug,
-                any_value(n.question) AS question,
-                any_value(n.market_family) AS market_family,
-                any_value(n.expected_tokens) AS num_tokens,
-                list(n.node_id ORDER BY n.outcome_index) AS token_ids,
-                list(n.outcome_label ORDER BY n.outcome_index) AS outcome_labels,
-                bool_or(n.is_active) AS is_active,
-                bool_or(n.is_closed) AS is_closed,
-                max(n.market_volume_usd) AS market_volume_usd,
-                min(n.first_seen_ts) AS first_seen_ts,
-                max(n.last_seen_ts) AS last_seen_ts,
-                any_value(c.current_sum_price) AS current_sum_price,
-                avg(s.sum_price) AS mean_sum_price
-            FROM nodes_v n
-            LEFT JOIN complete_sums s USING (market_id)
+                n.event_slug,
+                n.question,
+                n.market_family,
+                n.num_tokens,
+                n.token_ids,
+                n.outcome_labels,
+                n.is_active,
+                n.is_closed,
+                n.market_volume_usd,
+                n.first_seen_ts,
+                n.last_seen_ts,
+                c.current_sum_price,
+                m.mean_sum_price
+            FROM node_groups n
+            LEFT JOIN mean_sums m USING (market_id)
             LEFT JOIN current_sums c USING (market_id)
-            GROUP BY n.market_id
         ) TO '{q(out_dir / "market_groups.parquet")}' (FORMAT PARQUET);
         """
     )
