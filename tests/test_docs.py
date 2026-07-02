@@ -4,32 +4,33 @@ import re
 from pathlib import Path
 
 from oddsgraph.artifacts import ARTIFACT_COLUMNS, OPTIONAL_PARQUET_ARTIFACTS, PARQUET_ARTIFACTS, REPORTS
+from oddsgraph.cli import build_parser
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
-CLI_SOURCE = ROOT / "oddsgraph" / "cli.py"
 
 
 def test_cli_docs_cover_subcommands_and_build_flags() -> None:
-    cli_source = CLI_SOURCE.read_text(encoding="utf-8")
+    subcommands = _subcommand_parsers(build_parser())
     cli_doc = (DOCS / "cli.md").read_text(encoding="utf-8")
     builds_doc = (DOCS / "builds.md").read_text(encoding="utf-8")
+    benchmark_doc = (DOCS / "benchmarks.md").read_text(encoding="utf-8")
 
-    subcommands = set(re.findall(r'sub\.add_parser\("([^"]+)"\)', cli_source))
     assert subcommands
     for command in sorted(subcommands):
         assert f"`{command}`" in cli_doc
 
-    build_block = cli_source.split('sub.add_parser("build")', 1)[1].split(
-        'sub.add_parser("benchmark-summary")',
-        1,
-    )[0]
-    flags = set(re.findall(r'add_argument\("--([^"]+)"', build_block))
+    flags = _long_options(subcommands["build"])
     assert flags
     documented_flags = cli_doc + "\n" + builds_doc
     for flag in sorted(flags):
-        assert f"--{flag}" in documented_flags
+        assert flag in documented_flags
+
+    benchmark_flags = _long_options(subcommands["benchmark-compare"])
+    benchmark_docs = cli_doc + "\n" + benchmark_doc
+    for flag in sorted(benchmark_flags):
+        assert flag in benchmark_docs
 
 
 def test_artifact_docs_cover_artifacts_reports_and_columns() -> None:
@@ -93,6 +94,23 @@ def test_local_markdown_links_resolve() -> None:
 def _markdown_links(text: str) -> list[str]:
     raw_links = re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", text)
     return [link.split()[0].strip("<>") for link in raw_links]
+
+
+def _subcommand_parsers(parser: object) -> dict[str, object]:
+    for action in parser._actions:
+        choices = getattr(action, "choices", None)
+        if choices and "build" in choices:
+            return dict(choices)
+    raise AssertionError("No argparse subcommands found")
+
+
+def _long_options(parser: object) -> set[str]:
+    return {
+        option
+        for action in parser._actions
+        for option in action.option_strings
+        if option.startswith("--") and option != "--help"
+    }
 
 
 def _is_external_or_generated_link(target: str) -> bool:

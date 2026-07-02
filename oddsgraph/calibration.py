@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from . import thresholds as T
-from .artifacts import ARTIFACT_COLUMNS, ARTIFACT_EMPTY_TYPES
+from .artifacts import ARTIFACT_COLUMNS, ARTIFACT_EMPTY_TYPES, artifact_projection
+from .contracts import SCORED_EDGES_COLUMNS, validate_relation_columns
 from .queries import DuckDB, q
 from .sql import create_table_from_rows_sql
 
@@ -67,7 +68,15 @@ def fit_calibration(db: DuckDB, out_dir: Path) -> tuple[list[dict[str, Any]], Ef
                 0.0::DOUBLE AS equivalence_p95, 0.0::DOUBLE AS implication_p95, 0.0::DOUBLE AS exclusion_p95
             WHERE false
         """)
-        db.execute(f"COPY calibration_v TO '{q(out_dir / 'calibration.parquet')}' (FORMAT PARQUET);")
+        validate_relation_columns(db, "calibration_v")
+        db.execute(
+            f"""
+            COPY (
+                SELECT {artifact_projection("calibration.parquet")}
+                FROM calibration_v
+            ) TO '{q(out_dir / 'calibration.parquet')}' (FORMAT PARQUET);
+            """
+        )
         return calibration_rows, effective
 
     n = len(complement_errors)
@@ -122,7 +131,15 @@ def fit_calibration(db: DuckDB, out_dir: Path) -> tuple[list[dict[str, Any]], Ef
         CALIBRATION_COLUMNS,
         CALIBRATION_EMPTY_TYPES,
     ))
-    db.execute(f"COPY calibration_v TO '{q(out_dir / 'calibration.parquet')}' (FORMAT PARQUET);")
+    validate_relation_columns(db, "calibration_v")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection("calibration.parquet")}
+            FROM calibration_v
+        ) TO '{q(out_dir / 'calibration.parquet')}' (FORMAT PARQUET);
+        """
+    )
     return calibration_rows, effective
 
 
@@ -205,6 +222,7 @@ def apply_calibration_confidence(db: DuckDB, effective: EffectiveThresholds) -> 
         DROP TABLE scored_edges_v;
         ALTER TABLE scored_edges_recalibrated RENAME TO scored_edges_v;
     """)
+    validate_relation_columns(db, "scored_edges_v", SCORED_EDGES_COLUMNS)
     _rebuild_edge_tables(db, effective)
 
 
@@ -263,6 +281,8 @@ def _rebuild_edge_tables(db: DuckDB, effective: EffectiveThresholds) -> None:
                     AND l.edge_type = s.edge_type
             );
     """)
+    validate_relation_columns(db, "logic_edges_v")
+    validate_relation_columns(db, "price_edges_v")
 
 
 def _quantile(values: list[float], q: float) -> float:

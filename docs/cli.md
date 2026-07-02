@@ -56,6 +56,27 @@ build stages.
 python -m oddsgraph.cli benchmark-summary --out output/wc2026
 ```
 
+### `benchmark-compare`
+
+Runs one full build and one fast graph build from the same input, writes
+`benchmark_compare.json`, and prints the key runtime/count comparison. Runtime
+deltas are informational only.
+
+Flags:
+
+- `--input PATH`: source odds parquet.
+- `--out-root DIR`: parent directory for `full`, `fast_graph`, and
+  `benchmark_compare.json`.
+- `--graph-lookback-days N`, default `30`: fast graph lookback window.
+- `--baseline-json PATH`: optional previous comparison JSON for numeric deltas.
+
+```bash
+python -m oddsgraph.cli benchmark-compare \
+  --input wc2026_token_minutely_odds_20260702T070755Z.parquet \
+  --out-root output/benchmark_compare \
+  --graph-lookback-days 30
+```
+
 ## Query Commands
 
 All query commands read existing artifacts from `--out`.

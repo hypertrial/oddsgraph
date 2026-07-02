@@ -4,13 +4,15 @@ from pathlib import Path
 from typing import Any
 
 from . import thresholds as T
+from .artifacts import artifact_projection
+from .contracts import validate_relation_columns
 from .queries import DuckDB, q
 
 
 def write_constraints(db: DuckDB, out_dir: Path) -> None:
     db.execute(
-        f"""
-        COPY (
+        """
+        CREATE TABLE constraint_hyperedges_v AS
             WITH pair_nodes AS (
                 SELECT
                     market_id,
@@ -53,7 +55,15 @@ def write_constraints(db: DuckDB, out_dir: Path) -> None:
                 END AS evidence
             FROM pair_nodes p
             LEFT JOIN market_sums m USING (market_id)
-            LEFT JOIN current_sums c USING (market_id)
+            LEFT JOIN current_sums c USING (market_id);
+        """
+    )
+    validate_relation_columns(db, "constraint_hyperedges_v")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection("constraint_hyperedges.parquet")}
+            FROM constraint_hyperedges_v
         ) TO '{q(out_dir / "constraint_hyperedges.parquet")}' (FORMAT PARQUET);
         """
     )
@@ -184,7 +194,15 @@ def write_conditionals(db: DuckDB, out_dir: Path) -> None:
         UNION ALL
         SELECT * FROM frechet;
 
-        COPY conditional_edges_v TO '{q(out_dir / "conditional_edges.parquet")}' (FORMAT PARQUET);
+        """
+    )
+    validate_relation_columns(db, "conditional_edges_v")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection("conditional_edges.parquet")}
+            FROM conditional_edges_v
+        ) TO '{q(out_dir / "conditional_edges.parquet")}' (FORMAT PARQUET);
         """
     )
 
@@ -358,7 +376,14 @@ def write_violations(db: DuckDB, out_dir: Path, effective: Any) -> None:
             last_seen_ts,
             description
         FROM global_incoherence;
-
-        COPY violations_v TO '{q(out_dir / "violations.parquet")}' (FORMAT PARQUET);
+        """
+    )
+    validate_relation_columns(db, "violations_v")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection("violations.parquet")}
+            FROM violations_v
+        ) TO '{q(out_dir / "violations.parquet")}' (FORMAT PARQUET);
         """
     )

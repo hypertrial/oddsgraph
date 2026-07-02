@@ -28,6 +28,8 @@ Major stages:
    manifest.
 
 Each timed stage is recorded in `build_manifest.json` under `stage_timings`.
+Critical intermediate tables are validated with lightweight column contracts
+immediately after creation, so schema drift fails near the producing stage.
 
 ## Major Tables And Views
 

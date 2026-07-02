@@ -169,3 +169,8 @@ def reports(*, has_evaluation: bool) -> tuple[str, ...]:
     if has_evaluation:
         return tuple(f"reports/{name}" for name in REPORTS)
     return tuple(f"reports/{name}" for name in REPORTS if name != "evaluation.md")
+
+
+def artifact_projection(artifact: str, *, table_alias: str | None = None) -> str:
+    prefix = f"{table_alias}." if table_alias else ""
+    return ", ".join(f"{prefix}{column}" for column in ARTIFACT_COLUMNS[artifact])

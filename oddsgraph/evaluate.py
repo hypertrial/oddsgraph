@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .artifacts import ARTIFACT_COLUMNS, ARTIFACT_EMPTY_TYPES
+from .artifacts import ARTIFACT_COLUMNS, ARTIFACT_EMPTY_TYPES, artifact_projection
+from .contracts import validate_relation_columns
 from .queries import DuckDB, q
+from .reports import markdown_table
 from .sql import create_table_from_rows_sql
 
 
@@ -132,7 +134,15 @@ def _write_evaluation(db: DuckDB, out_dir: Path, rows: list[dict[str, Any]]) -> 
         EVALUATION_COLUMNS,
         EVALUATION_EMPTY_TYPES,
     ))
-    db.execute(f"COPY evaluation_v TO '{q(out_dir / 'evaluation.parquet')}' (FORMAT PARQUET);")
+    validate_relation_columns(db, "evaluation_v")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection("evaluation.parquet")}
+            FROM evaluation_v
+        ) TO '{q(out_dir / 'evaluation.parquet')}' (FORMAT PARQUET);
+        """
+    )
 
 
 def _write_evaluation_report(out_dir: Path, rows: list[dict[str, Any]]) -> None:
@@ -142,19 +152,5 @@ def _write_evaluation_report(out_dir: Path, rows: list[dict[str, Any]]) -> None:
     if not rows:
         lines.append("No evaluation rows.")
     else:
-        lines.append("| metric_type | artifact | edge_basis | edge_type | violation_type | liquidity_bucket | edge_count | value |")
-        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
-        for row in rows:
-            lines.append(
-                "| {metric_type} | {artifact} | {edge_basis} | {edge_type} | {violation_type} | {liquidity_bucket} | {edge_count} | {value} |".format(
-                    metric_type=row.get("metric_type", ""),
-                    artifact=row.get("artifact", ""),
-                    edge_basis=row.get("edge_basis", ""),
-                    edge_type=row.get("edge_type", ""),
-                    violation_type=row.get("violation_type", ""),
-                    liquidity_bucket=row.get("liquidity_bucket", ""),
-                    edge_count=row.get("edge_count", ""),
-                    value=row.get("value", ""),
-                )
-            )
+        lines.extend(markdown_table(rows, EVALUATION_COLUMNS))
     (reports / "evaluation.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

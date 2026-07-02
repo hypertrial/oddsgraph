@@ -11,7 +11,8 @@ from scipy.optimize import linprog
 from scipy.sparse import csr_matrix
 
 from . import thresholds as T
-from .artifacts import ARTIFACT_COLUMNS, ARTIFACT_EMPTY_TYPES
+from .artifacts import ARTIFACT_COLUMNS, ARTIFACT_EMPTY_TYPES, artifact_projection
+from .contracts import validate_relation_columns
 from .queries import DuckDB, q
 from .sql import create_table_from_rows_sql, values_rows_sql
 
@@ -100,7 +101,15 @@ def compute_transitive_closure(db: DuckDB, out_dir: Path) -> None:
             DERIVED_EDGE_COLUMNS,
             DERIVED_EDGE_EMPTY_TYPES,
         ))
-    db.execute(f"COPY derived_edges_v TO '{q(out_dir / 'derived_edges.parquet')}' (FORMAT PARQUET);")
+    validate_relation_columns(db, "derived_edges_v")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection("derived_edges.parquet")}
+            FROM derived_edges_v
+        ) TO '{q(out_dir / 'derived_edges.parquet')}' (FORMAT PARQUET);
+        """
+    )
 
 
 def solve_event_coherence(db: DuckDB, out_dir: Path) -> list[str]:
@@ -158,12 +167,14 @@ def create_empty_coherence_tables(db: DuckDB) -> None:
         COHERENCE_COLUMNS,
         COHERENCE_EMPTY_TYPES,
     ))
+    validate_relation_columns(db, "coherence_v")
     db.execute(create_table_from_rows_sql(
         "coherence_repairs_v",
         [],
         REPAIR_COLUMNS,
         REPAIR_EMPTY_TYPES,
     ))
+    validate_relation_columns(db, "coherence_repairs_v")
 
 
 def _collect_constraints(db: DuckDB, model: EventModel) -> list[LpConstraint]:
@@ -374,4 +385,13 @@ def _write_table(
     empty_types: dict[str, str],
 ) -> None:
     db.execute(create_table_from_rows_sql(table, rows, columns, empty_types))
-    db.execute(f"COPY {table} TO '{q(path)}' (FORMAT PARQUET);")
+    validate_relation_columns(db, table, columns)
+    projection = ", ".join(columns)
+    db.execute(
+        f"""
+        COPY (
+            SELECT {projection}
+            FROM {table}
+        ) TO '{q(path)}' (FORMAT PARQUET);
+        """
+    )

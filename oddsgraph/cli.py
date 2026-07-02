@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .benchmark import benchmark_summary
+from .benchmark import benchmark_compare, benchmark_summary
 from .build import build
 from .queries import q
 from .search import read_rows, resolve_node, search_nodes
@@ -19,7 +19,7 @@ EDGE_TO_CANDIDATE = {
 }
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oddsgraph")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -37,18 +37,24 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("benchmark-summary")
     p.add_argument("--out", required=True, type=Path)
 
+    p = sub.add_parser("benchmark-compare")
+    p.add_argument("--input", required=True, type=Path)
+    p.add_argument("--out-root", required=True, type=Path)
+    p.add_argument("--graph-lookback-days", type=int, default=30)
+    p.add_argument("--baseline-json", type=Path, default=None)
+
     p = sub.add_parser("nodes")
     p.add_argument("--out", required=True, type=Path)
     p.add_argument("--top", type=int, default=50)
 
     p = sub.add_parser("edges")
     p.add_argument("--out", required=True, type=Path)
-    p.add_argument("--edge-type", default=None)
+    p.add_argument("--edge-type", default=None, choices=EDGE_TYPES)
     p.add_argument("--top", type=int, default=50)
 
     p = sub.add_parser("price-edges")
     p.add_argument("--out", required=True, type=Path)
-    p.add_argument("--edge-type", default=None)
+    p.add_argument("--edge-type", default=None, choices=EDGE_TYPES)
     p.add_argument("--top", type=int, default=50)
 
     p = sub.add_parser("violations")
@@ -81,7 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True, type=Path)
     p.add_argument("--query", required=True)
     p.add_argument("--top", type=int, default=20)
+    return parser
 
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     try:
         if args.cmd == "build":
@@ -105,6 +115,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{key}: {value}")
         elif args.cmd == "benchmark-summary":
             print(benchmark_summary(args.out), end="")
+        elif args.cmd == "benchmark-compare":
+            print(
+                benchmark_compare(
+                    args.input,
+                    args.out_root,
+                    graph_lookback_days=args.graph_lookback_days,
+                    baseline_json=args.baseline_json,
+                ),
+                end="",
+            )
         elif args.cmd == "nodes":
             _print_rows(read_rows(args.out, "nodes.parquet", f"""
                 SELECT node_id, market_id, outcome_label, current_price, canonical_proposition

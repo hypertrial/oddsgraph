@@ -177,11 +177,7 @@ def _query_report(db: DuckDB, title: str, sql: str) -> str:
     lines = [f"# {title}", ""]
     if not rows:
         return "\n".join(lines + ["No rows.", ""])
-    cols = list(rows[0])
-    lines.append("| " + " | ".join(cols) + " |")
-    lines.append("| " + " | ".join("---" for _ in cols) + " |")
-    for row in rows:
-        lines.append("| " + " | ".join(_cell(row.get(col)) for col in cols) + " |")
+    lines.extend(markdown_table(rows))
     return "\n".join(lines) + "\n"
 
 
@@ -190,12 +186,19 @@ def _append_table(lines: list[str], title: str, rows: list[dict[str, object]]) -
     if not rows:
         lines.extend(["No rows.", ""])
         return
-    cols = list(rows[0])
-    lines.append("| " + " | ".join(cols) + " |")
-    lines.append("| " + " | ".join("---" for _ in cols) + " |")
+    lines.extend(markdown_table(rows))
+    lines.append("")
+
+
+def markdown_table(rows: list[dict[str, object]], columns: list[str] | None = None) -> list[str]:
+    cols = columns or list(rows[0])
+    lines = [
+        "| " + " | ".join(cols) + " |",
+        "| " + " | ".join("---" for _ in cols) + " |",
+    ]
     for row in rows:
         lines.append("| " + " | ".join(_cell(row.get(col)) for col in cols) + " |")
-    lines.append("")
+    return lines
 
 
 def _cell(value: object) -> str:

@@ -28,6 +28,19 @@ Summarize a completed run:
 python -m oddsgraph.cli benchmark-summary --out output/perf_fast_graph
 ```
 
+Run a paired full/fast graph comparison:
+
+```bash
+python -m oddsgraph.cli benchmark-compare \
+  --input wc2026_token_minutely_odds_20260702T070755Z.parquet \
+  --out-root output/debt_pr_benchmark \
+  --graph-lookback-days 30
+```
+
+To compare against a previous paired run, pass its
+`benchmark_compare.json` with `--baseline-json`. Runtime deltas are printed and
+stored, but the command does not fail on noisy local timing changes.
+
 Record:
 
 - runtime seconds from `stats.runtime_seconds`.

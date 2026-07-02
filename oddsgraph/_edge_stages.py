@@ -6,6 +6,8 @@ from typing import TypeVar
 
 from . import noise
 from . import thresholds as T
+from .artifacts import artifact_projection
+from .contracts import SCORED_EDGES_RAW_COLUMNS, validate_relation_columns
 from .queries import DuckDB, q
 
 T_ = TypeVar("T_")
@@ -168,7 +170,15 @@ def write_candidates(db: DuckDB, out_dir: Path) -> None:
         GROUP BY 1, 2, 3;
         """
     )
-    db.execute(f"COPY candidate_edges_v TO '{q(out_dir / 'candidate_edges.parquet')}' (FORMAT PARQUET);")
+    validate_relation_columns(db, "candidate_edges_v")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection("candidate_edges.parquet")}
+            FROM candidate_edges_v
+        ) TO '{q(out_dir / 'candidate_edges.parquet')}' (FORMAT PARQUET);
+        """
+    )
 
 
 def score_edges(
@@ -179,9 +189,21 @@ def score_edges(
     lookback_days: int | None = None,
 ) -> None:
     del out_dir
-    stage("  scoring_minute_prices", lambda: db.execute(noise.create_scoring_minute_prices_sql(lookback_days)))
-    stage("  aligned_edges", lambda: db.execute(noise.create_aligned_edges_sql()))
-    stage("  pair_persistence", lambda: db.execute(noise.create_pair_persistence_sql()))
+    def create_scoring_minute_prices() -> None:
+        db.execute(noise.create_scoring_minute_prices_sql(lookback_days))
+        validate_relation_columns(db, "scoring_minute_prices")
+
+    def create_aligned_edges() -> None:
+        db.execute(noise.create_aligned_edges_sql())
+        validate_relation_columns(db, "aligned_edges")
+
+    def create_pair_persistence() -> None:
+        db.execute(noise.create_pair_persistence_sql())
+        validate_relation_columns(db, "pair_persistence")
+
+    stage("  scoring_minute_prices", create_scoring_minute_prices)
+    stage("  aligned_edges", create_aligned_edges)
+    stage("  pair_persistence", create_pair_persistence)
     db.execute(
         f"""
         CREATE TABLE current_pair_prices AS
@@ -322,3 +344,7 @@ def score_edges(
             );
         """
     )
+    validate_relation_columns(db, "current_pair_prices")
+    validate_relation_columns(db, "scored_edges_v", SCORED_EDGES_RAW_COLUMNS)
+    validate_relation_columns(db, "logic_edges_v")
+    validate_relation_columns(db, "price_edges_v")

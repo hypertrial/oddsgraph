@@ -9,11 +9,12 @@ from typing import Callable, TypeVar
 T_ = TypeVar("T_")
 
 from . import noise
-from .artifacts import ARTIFACT_COLUMNS, FINAL_EDGE_ARTIFACT_TABLES, REPORTS, parquet_artifacts, reports
+from .artifacts import ARTIFACT_COLUMNS, FINAL_EDGE_ARTIFACT_TABLES, REPORTS, artifact_projection, parquet_artifacts, reports
 from ._diagnostic_stages import write_conditionals, write_constraints, write_violations
 from ._edge_stages import score_edges, write_candidates
 from .calibration import apply_calibration_confidence, fit_calibration, thresholds_as_dict
 from .coherence import compute_transitive_closure, create_empty_coherence_tables, solve_event_coherence
+from .contracts import validate_relation_columns
 from .evaluate import run_evaluation
 from .queries import DuckDB, q
 from .reports import write_reports
@@ -206,7 +207,14 @@ def _write_manifest(
 
 
 def _copy_table(db: DuckDB, out_dir: Path, table: str, artifact: str) -> None:
-    db.execute(f"COPY {table} TO '{q(out_dir / artifact)}' (FORMAT PARQUET);")
+    db.execute(
+        f"""
+        COPY (
+            SELECT {artifact_projection(artifact)}
+            FROM {table}
+        ) TO '{q(out_dir / artifact)}' (FORMAT PARQUET);
+        """
+    )
 
 
 def _write_final_edges(db: DuckDB, out_dir: Path) -> None:
@@ -274,6 +282,7 @@ def _create_input_prices(db: DuckDB, input_path: Path) -> None:
         FROM read_parquet('{src}');
         """
     )
+    validate_relation_columns(db, "input_prices")
 
 
 def _create_views(
@@ -339,6 +348,7 @@ def _create_token_minute_prices(
             WHERE rn = 1;
             """
         )
+        validate_relation_columns(db, "token_minute_prices")
         return
 
     lookback_seconds = graph_lookback_days * 24 * 3600
@@ -402,6 +412,7 @@ def _create_token_minute_prices(
         WHERE rn = 1;
         """
     )
+    validate_relation_columns(db, "token_minute_prices")
 
 
 def _create_enriched_minute_prices(db: DuckDB, quotes_path: Path | None) -> None:
@@ -412,6 +423,8 @@ def _create_enriched_minute_prices(db: DuckDB, quotes_path: Path | None) -> None
         {noise.create_enriched_minute_prices_sql()}
         """
     )
+    validate_relation_columns(db, "quote_minute_prices")
+    validate_relation_columns(db, "enriched_minute_prices")
 
 
 def _create_semantic_tables(db: DuckDB, taxonomy: Taxonomy) -> None:
@@ -471,6 +484,9 @@ def _create_market_minute_tables(db: DuckDB) -> None:
         GROUP BY p.market_id, p.odds_minute_epoch, t.expected_tokens, e.current_minute_epoch;
         """
     )
+    validate_relation_columns(db, "market_token_counts")
+    validate_relation_columns(db, "market_complete_epochs")
+    validate_relation_columns(db, "market_minute_sums")
     _require_zero(db, "markets without complete current minute", """
         SELECT count(*)
         FROM market_token_counts t
@@ -523,6 +539,8 @@ def _create_token_stats_tables(db: DuckDB) -> None:
         GROUP BY t.node_id;
         """
     )
+    validate_relation_columns(db, "token_stats")
+    validate_relation_columns(db, "token_current")
 
 
 def _create_nodes_view(db: DuckDB, taxonomy: Taxonomy) -> None:
@@ -582,6 +600,7 @@ def _create_nodes_view(db: DuckDB, taxonomy: Taxonomy) -> None:
         LEFT JOIN token_current c USING (node_id);
         """
     )
+    validate_relation_columns(db, "nodes_v")
 
 
 def _validate_token_minute_prices(db: DuckDB) -> None:
@@ -702,11 +721,7 @@ def _write_nodes(db: DuckDB, out_dir: Path) -> None:
         f"""
         COPY (
             SELECT
-                node_id, market_id, outcome_index, clob_token_id, question, outcome_label,
-                event_slug, is_active, is_closed, market_volume_usd, market_family,
-                canonical_proposition, proposition_type, expected_tokens,
-                first_seen_ts, last_seen_ts, active_minutes, current_price, current_price_devig,
-                mean_price, mean_price_devig, min_price, max_price
+                {artifact_projection("nodes.parquet")}
             FROM nodes_v
         ) TO '{q(out_dir / "nodes.parquet")}' (FORMAT PARQUET);
         """
@@ -717,6 +732,8 @@ def _write_market_groups(db: DuckDB, out_dir: Path) -> None:
     db.execute(
         f"""
         COPY (
+            SELECT {artifact_projection("market_groups.parquet")}
+            FROM (
             WITH sums AS (
                 SELECT
                     market_id,
@@ -770,6 +787,7 @@ def _write_market_groups(db: DuckDB, out_dir: Path) -> None:
             FROM node_groups n
             LEFT JOIN mean_sums m USING (market_id)
             LEFT JOIN current_sums c USING (market_id)
+            ) AS market_groups
         ) TO '{q(out_dir / "market_groups.parquet")}' (FORMAT PARQUET);
         """
     )
