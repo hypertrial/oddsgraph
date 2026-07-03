@@ -18,5 +18,5 @@ def synthetic_input(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture(scope="session")
 def synthetic_output(tmp_path_factory: pytest.TempPathFactory, synthetic_input: Path) -> Path:
     out = tmp_path_factory.mktemp("synthetic_build") / "out"
-    build(synthetic_input, out)
+    build(synthetic_input, out, current_max_age_hours=None)
     return out

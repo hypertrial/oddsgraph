@@ -29,6 +29,8 @@ from .rules import (
 from .schema import InputFormat, create_input_prices, validate_input_schema, validate_input_table
 from .thresholds import ThresholdBucketCounts, bucket_counts, bucket_counts_as_dict
 
+DEFAULT_CURRENT_MAX_AGE_HOURS = 48.0
+
 
 def _stage(
     name: str,
@@ -56,9 +58,12 @@ def build(
     solve_coherence: bool = True,
     fast_graph: bool = False,
     graph_lookback_days: int = 30,
+    current_max_age_hours: float | None = DEFAULT_CURRENT_MAX_AGE_HOURS,
 ) -> dict[str, str | int | float | None]:
     if graph_lookback_days <= 0:
         raise ValueError("graph_lookback_days must be positive")
+    if current_max_age_hours is not None and current_max_age_hours <= 0:
+        raise ValueError("current_max_age_hours must be positive")
     actual_write_prices = write_prices and not fast_graph
     actual_solve_coherence = solve_coherence and not fast_graph
     start = time.time()
@@ -88,6 +93,7 @@ def build(
                 stage,
                 fast_graph=fast_graph,
                 graph_lookback_days=graph_lookback_days,
+                current_max_age_hours=current_max_age_hours,
             ),
         )
         if actual_write_prices:
@@ -127,7 +133,15 @@ def build(
         )
         if resolutions_path is not None:
             stage("run_evaluation", lambda: run_evaluation(db, out_dir, resolutions_path))
-        stats = stage("stats", lambda: _stats(db, start, fast_graph=fast_graph))
+        stats = stage(
+            "stats",
+            lambda: _stats(
+                db,
+                start,
+                fast_graph=fast_graph,
+                current_max_age_hours=current_max_age_hours,
+            ),
+        )
         stage("write_reports", lambda: write_reports(db, out_dir, stats))
         stage(
             "validate_generated_artifacts",
@@ -153,6 +167,7 @@ def build(
             has_coherence=actual_solve_coherence,
             fast_graph=fast_graph,
             graph_lookback_days=graph_lookback_days,
+            current_max_age_hours=current_max_age_hours,
             input_format=input_format,
             threshold_bucket_counts=threshold_bucket_counts,
             stage_timings=stage_timings,
@@ -188,6 +203,7 @@ def _write_manifest(
     has_coherence: bool,
     fast_graph: bool,
     graph_lookback_days: int,
+    current_max_age_hours: float | None,
     input_format: InputFormat,
     threshold_bucket_counts: ThresholdBucketCounts,
     stage_timings: dict[str, float],
@@ -211,6 +227,7 @@ def _write_manifest(
             "solve_coherence": has_coherence,
             "fast_graph": fast_graph,
             "graph_lookback_days": graph_lookback_days,
+            "current_max_age_hours": current_max_age_hours,
         },
         "artifacts": list(
             parquet_artifacts(
@@ -296,6 +313,7 @@ def _create_views(
     *,
     fast_graph: bool,
     graph_lookback_days: int,
+    current_max_age_hours: float | None,
 ) -> None:
     stage(
         "  token_minute_prices",
@@ -308,7 +326,13 @@ def _create_views(
     stage("  validate_token_minute_prices", lambda: _validate_token_minute_prices(db))
     stage("  enriched_minute_prices", lambda: _create_enriched_minute_prices(db, quotes_path))
     stage("  semantic_tables", lambda: _create_semantic_tables(db, taxonomy))
-    stage("  market_completeness", lambda: _create_market_minute_tables(db))
+    stage(
+        "  market_completeness",
+        lambda: _create_market_minute_tables(
+            db,
+            current_max_age_hours=current_max_age_hours,
+        ),
+    )
     stage("  token_stats", lambda: _create_token_stats_tables(db))
     stage("  validate_token_current", lambda: _validate_token_current(db))
     stage("  nodes_view", lambda: _create_nodes_view(db, taxonomy))
@@ -454,28 +478,95 @@ def _create_semantic_tables(db: DuckDB, taxonomy: Taxonomy) -> None:
     )
 
 
-def _create_market_minute_tables(db: DuckDB) -> None:
-    db.execute(
+def _create_market_minute_tables(
+    db: DuckDB,
+    *,
+    current_max_age_hours: float | None = DEFAULT_CURRENT_MAX_AGE_HOURS,
+) -> None:
+    current_max_age_seconds = (
+        None if current_max_age_hours is None else int(current_max_age_hours * 3600)
+    )
+    min_current_epoch_sql = (
+        "NULL::BIGINT"
+        if current_max_age_seconds is None
+        else f"b.global_current_minute_epoch - {current_max_age_seconds}"
+    )
+    eligible_sql = (
+        "l.latest_complete_epoch IS NOT NULL"
+        if current_max_age_seconds is None
+        else f"""
+            l.latest_complete_epoch IS NOT NULL
+            AND coalesce(is_active, false)
+            AND NOT coalesce(is_closed, false)
+            AND l.latest_complete_epoch >= {min_current_epoch_sql}
         """
+    )
+    db.execute(
+        f"""
+        CREATE TABLE market_current_eligibility AS
+        WITH expected AS (
+            SELECT market_id, count(DISTINCT clob_token_id) AS expected_tokens
+            FROM input_prices
+            GROUP BY market_id
+        ),
+        complete_epochs AS (
+            SELECT
+                p.market_id,
+                p.odds_minute_epoch,
+                count(DISTINCT p.clob_token_id) AS token_count
+            FROM token_minute_prices p
+            JOIN expected e USING (market_id)
+            GROUP BY p.market_id, p.odds_minute_epoch, e.expected_tokens
+            HAVING count(DISTINCT p.clob_token_id) = e.expected_tokens
+        ),
+        latest AS (
+            SELECT market_id, max(odds_minute_epoch) AS latest_complete_epoch
+            FROM complete_epochs
+            GROUP BY market_id
+        ),
+        state AS (
+            SELECT
+                p.market_id,
+                bool_or(p.is_active) AS is_active,
+                bool_or(p.is_closed) AS is_closed
+            FROM token_minute_prices p
+            JOIN latest l
+                ON p.market_id = l.market_id
+                AND p.odds_minute_epoch = l.latest_complete_epoch
+            GROUP BY p.market_id
+        ),
+        bounds AS (
+            SELECT max(odds_minute_epoch) AS global_current_minute_epoch
+            FROM token_minute_prices
+        )
+        SELECT
+            e.market_id,
+            e.expected_tokens,
+            l.latest_complete_epoch AS current_minute_epoch,
+            s.is_active,
+            s.is_closed,
+            b.global_current_minute_epoch,
+            {min_current_epoch_sql} AS min_current_minute_epoch,
+            ({eligible_sql}) AS is_current_eligible
+        FROM expected e
+        LEFT JOIN latest l USING (market_id)
+        LEFT JOIN state s USING (market_id)
+        CROSS JOIN bounds b;
+
         CREATE TABLE market_token_counts AS
         SELECT market_id, count(DISTINCT clob_token_id) AS expected_tokens
         FROM input_prices
+        WHERE market_id IN (
+            SELECT market_id
+            FROM market_current_eligibility
+            WHERE is_current_eligible
+        )
         GROUP BY market_id;
 
         CREATE TABLE market_complete_epochs AS
-        WITH counts AS (
-            SELECT
-                market_id,
-                odds_minute_epoch,
-                count(DISTINCT clob_token_id) AS token_count
-            FROM token_minute_prices
-            GROUP BY 1, 2
-        )
-        SELECT c.market_id, max(c.odds_minute_epoch) AS current_minute_epoch
-        FROM counts c
-        JOIN market_token_counts t USING (market_id)
-        WHERE c.token_count = t.expected_tokens
-        GROUP BY c.market_id;
+        SELECT market_id, current_minute_epoch
+        FROM market_current_eligibility
+        WHERE is_current_eligible;
 
         CREATE VIEW market_minute_sums AS
         SELECT
@@ -493,6 +584,7 @@ def _create_market_minute_tables(db: DuckDB) -> None:
         GROUP BY p.market_id, p.odds_minute_epoch, t.expected_tokens, e.current_minute_epoch;
         """
     )
+    validate_relation_columns(db, "market_current_eligibility")
     validate_relation_columns(db, "market_token_counts")
     validate_relation_columns(db, "market_complete_epochs")
     validate_relation_columns(db, "market_minute_sums")
@@ -527,6 +619,7 @@ def _create_token_stats_tables(db: DuckDB) -> None:
             max(price) AS max_price,
             avg(price_devig) AS mean_price_devig
         FROM enriched_minute_prices
+        JOIN market_token_counts USING (market_id)
         GROUP BY clob_token_id;
 
         CREATE TABLE token_current AS
@@ -539,6 +632,7 @@ def _create_token_stats_tables(db: DuckDB) -> None:
         FROM (
             SELECT DISTINCT clob_token_id AS node_id, market_id
             FROM input_prices
+            WHERE market_id IN (SELECT market_id FROM market_token_counts)
         ) t
         LEFT JOIN market_complete_epochs e ON t.market_id = e.market_id
         LEFT JOIN enriched_minute_prices p
@@ -653,7 +747,9 @@ def _validate_nodes(db: DuckDB) -> None:
     """)
     _require_zero(db, "node/token mismatch", """
         WITH input_tokens AS (
-            SELECT DISTINCT clob_token_id AS node_id FROM input_prices
+            SELECT DISTINCT clob_token_id AS node_id
+            FROM input_prices
+            WHERE market_id IN (SELECT market_id FROM market_token_counts)
         ),
         nodes AS (
             SELECT node_id FROM nodes_v
@@ -729,6 +825,7 @@ def _write_prices(db: DuckDB, out_dir: Path) -> None:
                     PARTITION BY clob_token_id ORDER BY odds_minute_epoch
                 ) AS price_return_1m
             FROM enriched_minute_prices
+            WHERE market_id IN (SELECT market_id FROM market_token_counts)
         ) TO '{q(out_dir / "prices.parquet")}' (FORMAT PARQUET);
         """
     )
@@ -816,6 +913,7 @@ def _stats(
     start: float,
     *,
     fast_graph: bool = False,
+    current_max_age_hours: float | None = DEFAULT_CURRENT_MAX_AGE_HOURS,
 ) -> dict[str, str | int | float | None]:
     row = db.rows(
         """
@@ -823,6 +921,12 @@ def _stats(
             (SELECT count(*) FROM input_prices) AS input_rows,
             (SELECT count(DISTINCT market_id) FROM input_prices) AS markets,
             (SELECT count(DISTINCT clob_token_id) FROM input_prices) AS tokens,
+            (SELECT count(*) FROM market_current_eligibility WHERE is_current_eligible) AS eligible_current_markets,
+            (SELECT count(*) FROM market_current_eligibility WHERE NOT is_current_eligible AND is_closed) AS current_closed_excluded_markets,
+            (SELECT count(*) FROM market_current_eligibility WHERE NOT is_current_eligible AND NOT coalesce(is_active, false)) AS current_inactive_excluded_markets,
+            (SELECT count(*) FROM market_current_eligibility WHERE NOT is_current_eligible AND min_current_minute_epoch IS NOT NULL AND current_minute_epoch < min_current_minute_epoch) AS current_stale_excluded_markets,
+            (SELECT max(global_current_minute_epoch) FROM market_current_eligibility) AS global_current_epoch,
+            (SELECT max(min_current_minute_epoch) FROM market_current_eligibility) AS min_current_epoch,
             (SELECT min(odds_timestamp) FROM input_prices) AS time_range_start,
             (SELECT max(odds_timestamp) FROM input_prices) AS time_range_end,
             (SELECT count(*) FROM (SELECT market_id FROM input_prices GROUP BY market_id HAVING bool_or(is_active))) AS active_markets,
@@ -837,4 +941,5 @@ def _stats(
     )[0]
     row["runtime_seconds"] = round(time.time() - start, 3)
     row["history_mode"] = "fast_graph_lookback" if fast_graph else "full"
+    row["current_max_age_hours"] = current_max_age_hours
     return row

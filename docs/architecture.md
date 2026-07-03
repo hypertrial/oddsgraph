@@ -18,7 +18,8 @@ Major stages:
 4. Deduplicate token price buckets into `token_minute_prices`.
 5. Add devig, scoring prices, returns, and lookback filtering into enriched
    bucket tables.
-6. Build market completeness and market-bucket aggregate stats.
+6. Build current-market eligibility, market completeness, and market-bucket
+   aggregate stats.
 7. Build `nodes_v` and market group output.
 8. Generate candidate edges from same-market structure, duplicate propositions,
    taxonomy rules, and price signals.
@@ -44,6 +45,8 @@ immediately after creation, so schema drift fails near the producing stage.
 - `enriched_minute_prices`: deduped prices with devig, scoring, logit, returns,
   metadata, and current-bucket markers.
 - `scoring_minute_prices`: recent lookback subset used for pair scoring.
+- `market_current_eligibility`: latest complete market bucket, active/closed
+  state, global freshness bounds, and live-current eligibility.
 - `market_minute_sums`: shared market-bucket sums and completeness flags.
 - `nodes_v`: one row per token/proposition.
 - `candidate_edges_v`: all candidate relationships before acceptance filters.

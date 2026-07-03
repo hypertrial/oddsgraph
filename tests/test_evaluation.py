@@ -14,7 +14,7 @@ def test_evaluation_with_resolutions(synthetic_input: Path, tmp_path: Path) -> N
     out = tmp_path / "out"
     resolutions = tmp_path / "resolutions.parquet"
     write_synthetic_resolutions(resolutions)
-    build(synthetic_input, out, resolutions_path=resolutions)
+    build(synthetic_input, out, resolutions_path=resolutions, current_max_age_hours=None)
     assert (out / "evaluation.parquet").exists()
     assert (out / "reports" / "evaluation.md").exists()
     db = DuckDB()

@@ -13,7 +13,12 @@ from oddsgraph.queries import DuckDB, q
 def test_cli_smoke(synthetic_input: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     out = tmp_path / "out"
 
-    assert main(["build", "--input", str(synthetic_input), "--out", str(out)]) == 0
+    assert main([
+        "build",
+        "--input", str(synthetic_input),
+        "--out", str(out),
+        "--allow-stale-current",
+    ]) == 0
     assert main(["search", "--out", str(out), "--query", "Equivalent A"]) == 0
     assert "Will Equivalent A happen?" in capsys.readouterr().out
     assert main(["coherence", "--out", str(out), "--top", "5"]) == 0

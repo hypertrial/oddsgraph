@@ -29,18 +29,23 @@ Optional flags:
   prices and skipped coherence output.
 - `--graph-lookback-days N`: lookback window for `--fast-graph`. The value must
   be positive and can only be used with `--fast-graph`.
+- `--current-max-age-hours N`: live-current freshness window. Defaults to `48`;
+  markets whose latest complete bucket is older than this window, inactive, or
+  closed are excluded before graph construction.
+- `--allow-stale-current`: disable live-current eligibility for historical
+  fixtures or backtests that deliberately need legacy stale-current behavior.
 
 Examples:
 
 ```bash
 python -m oddsgraph.cli build \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
+  --input selected_token_live_hourly_odds_20260703T095031Z.parquet \
   --out output/wc2026
 ```
 
 ```bash
 python -m oddsgraph.cli build \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
+  --input selected_token_live_hourly_odds_20260703T095031Z.parquet \
   --out output/wc2026-fast-graph \
   --fast-graph \
   --graph-lookback-days 30

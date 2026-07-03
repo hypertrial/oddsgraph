@@ -45,6 +45,19 @@ HOURLY_MARKET_COLUMNS = [
     "start_epoch",
 ]
 
+STALE_CURRENT_HOURLY_MARKET_COLUMNS = [
+    "market_id",
+    "question",
+    "event_slug",
+    "yes_price",
+    "no_price",
+    "volume",
+    "bucket_count",
+    "start_epoch",
+    "is_active",
+    "is_closed",
+]
+
 
 def _values(rows: list[tuple[Any, ...]], columns: list[str]) -> str:
     return values_rows_sql([dict(zip(columns, row, strict=True)) for row in rows], columns)
@@ -345,6 +358,138 @@ def write_hourly_synthetic_input(path: Path) -> None:
             CROSS JOIN (VALUES (0, 'Yes'), (1, 'No')) AS o(outcome_index, outcome_label);
 
             COPY hourly_fixture TO '{q(path)}' (FORMAT PARQUET);
+            """
+        )
+    finally:
+        db.close()
+
+
+def write_stale_current_hourly_input(path: Path) -> None:
+    markets = [
+        (
+            "live_r16",
+            "Will Live reach the Round of 16 at the 2026 FIFA World Cup?",
+            "live-round-16",
+            0.60,
+            0.40,
+            20_000.0,
+            3,
+            98 * 3600,
+            True,
+            False,
+        ),
+        (
+            "live_qf",
+            "Will Live reach the Quarterfinals at the 2026 FIFA World Cup?",
+            "live-quarterfinals",
+            0.40,
+            0.60,
+            20_000.0,
+            3,
+            98 * 3600,
+            True,
+            False,
+        ),
+        (
+            "closed_r16",
+            "Will Closed reach the Round of 16 at the 2026 FIFA World Cup?",
+            "closed-round-16",
+            0.02,
+            0.98,
+            20_000.0,
+            3,
+            98 * 3600,
+            True,
+            True,
+        ),
+        (
+            "closed_qf",
+            "Will Closed reach the Quarterfinals at the 2026 FIFA World Cup?",
+            "closed-quarterfinals",
+            0.01,
+            0.99,
+            20_000.0,
+            3,
+            98 * 3600,
+            True,
+            True,
+        ),
+        (
+            "stale_r16",
+            "Will Stale reach the Round of 16 at the 2026 FIFA World Cup?",
+            "stale-round-16",
+            0.55,
+            0.45,
+            20_000.0,
+            3,
+            0,
+            True,
+            False,
+        ),
+        (
+            "stale_qf",
+            "Will Stale reach the Quarterfinals at the 2026 FIFA World Cup?",
+            "stale-quarterfinals",
+            0.30,
+            0.70,
+            20_000.0,
+            3,
+            0,
+            True,
+            False,
+        ),
+    ]
+    db = DuckDB(path.with_suffix(".duckdb"))
+    try:
+        db.execute(
+            f"""
+            CREATE TABLE stale_current_hourly_fixture AS
+            WITH market_defs(
+                market_id,
+                question,
+                event_slug,
+                yes_price,
+                no_price,
+                volume,
+                bucket_count,
+                start_epoch,
+                is_active,
+                is_closed
+            ) AS (
+                VALUES
+                {_values(markets, STALE_CURRENT_HOURLY_MARKET_COLUMNS)}
+            ),
+            hour AS (
+                SELECT range::BIGINT AS i
+                FROM range(3)
+            )
+            SELECT
+                market_id,
+                outcome_index,
+                market_id || ':' || outcome_label AS clob_token_id,
+                question,
+                outcome_label,
+                event_slug,
+                is_active,
+                is_closed,
+                volume AS market_volume_usd,
+                to_timestamp(start_epoch + i * 3600) AS odds_hour_utc,
+                (start_epoch + i * 3600)::BIGINT AS odds_hour_epoch,
+                CASE outcome_label WHEN 'Yes' THEN yes_price ELSE no_price END AS open_price,
+                CASE outcome_label WHEN 'Yes' THEN yes_price ELSE no_price END AS high_price,
+                CASE outcome_label WHEN 'Yes' THEN yes_price ELSE no_price END AS low_price,
+                CASE outcome_label WHEN 'Yes' THEN yes_price ELSE no_price END AS close_price,
+                CASE outcome_label WHEN 'Yes' THEN yes_price ELSE no_price END AS avg_price,
+                1::BIGINT AS observed_points,
+                (start_epoch + i * 3600)::BIGINT AS first_timestamp,
+                to_timestamp(start_epoch + i * 3600) AS first_observed_at,
+                (start_epoch + i * 3600)::BIGINT AS last_timestamp,
+                to_timestamp(start_epoch + i * 3600) AS last_observed_at
+            FROM market_defs
+            JOIN hour ON i < bucket_count
+            CROSS JOIN (VALUES (0, 'Yes'), (1, 'No')) AS o(outcome_index, outcome_label);
+
+            COPY stale_current_hourly_fixture TO '{q(path)}' (FORMAT PARQUET);
             """
         )
     finally:

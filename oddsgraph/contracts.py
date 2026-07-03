@@ -50,6 +50,17 @@ TOKEN_STATS_COLUMNS = [
     "mean_price_devig",
 ]
 
+MARKET_CURRENT_ELIGIBILITY_COLUMNS = [
+    "market_id",
+    "expected_tokens",
+    "current_minute_epoch",
+    "is_active",
+    "is_closed",
+    "global_current_minute_epoch",
+    "min_current_minute_epoch",
+    "is_current_eligible",
+]
+
 NODES_VIEW_COLUMNS = [
     *TOKEN_STATS_COLUMNS,
     "canonical_proposition",
@@ -140,6 +151,7 @@ INTERNAL_TABLE_COLUMNS = {
     "enriched_minute_prices": ENRICHED_MINUTE_COLUMNS,
     "scoring_minute_prices": ENRICHED_MINUTE_COLUMNS,
     "market_token_counts": ["market_id", "expected_tokens"],
+    "market_current_eligibility": MARKET_CURRENT_ELIGIBILITY_COLUMNS,
     "market_complete_epochs": ["market_id", "current_minute_epoch"],
     "market_minute_sums": [
         "market_id",

@@ -9,10 +9,14 @@ otherwise.
 Generate the odds parquet with
 [hypertrial/oddsfox](https://github.com/hypertrial/oddsfox). Follow its
 [quickstart](https://github.com/hypertrial/oddsfox/blob/main/docs/quickstart.md),
-then export `polymarket_marts.selected_token_hourly_odds` as parquet.
+then export `polymarket_marts.selected_token_live_hourly_odds` as parquet with
+`scripts/export_selected_hourly_odds.py --live-current`.
 
-The exported file should match the schema documented in
+The live export keeps the same schema documented in
 [`selected_token_hourly_odds_20260703T095031Z.md`](../selected_token_hourly_odds_20260703T095031Z.md).
+Historical `selected_token_hourly_odds` parquet is still supported for audits,
+backtests, and legacy fixtures; the build also filters stale or closed markets
+defensively by default.
 Legacy minutely parquet with `odds_timestamp`, `odds_timestamp_epoch`, and
 `price` is still supported for compatibility.
 
@@ -20,7 +24,7 @@ Legacy minutely parquet with `odds_timestamp`, `odds_timestamp_epoch`, and
 
 ```bash
 python -m oddsgraph.cli build \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
+  --input selected_token_live_hourly_odds_20260703T095031Z.parquet \
   --out output/wc2026
 ```
 
@@ -69,6 +73,17 @@ minutes.
 - `--taxonomy path.json`: event taxonomy for stage progression and
   single-winner families. Defaults to `oddsgraph/taxonomies/wc2026.json`.
 
+## Live-Current Eligibility
+
+By default, graph builds only admit markets whose latest complete source bucket
+is active, not closed, and within `48` hours of the input's global max bucket.
+This gate is applied before nodes, market groups, candidates, constraints,
+edges, violations, and coherence are built.
+
+Use `--current-max-age-hours N` to change the freshness window. Use
+`--allow-stale-current` only for historical fixtures or backtests that
+deliberately need legacy behavior.
+
 ## Optional Output Modes
 
 ### `--skip-prices`
@@ -97,8 +112,8 @@ Opt-in graph inspection mode. It implies `write_prices=False` and
 `--graph-lookback-days N` controls the fast graph history window. It defaults to
 `30`, must be positive, and is only valid with `--fast-graph`.
 
-Fast graph mode still computes current prices from each market's latest complete
-time bucket. Historical node fields such as `active_minutes`, `mean_price`,
+Fast graph mode still computes current prices from each eligible market's latest
+complete time bucket. Historical node fields such as `active_minutes`, `mean_price`,
 `mean_price_devig`, `min_price`, `max_price`, and market fields such as
 `mean_sum_price` are lookback-scoped. The manifest marks this with
 `stats.history_mode = "fast_graph_lookback"`.
@@ -139,9 +154,11 @@ Top-level manifest fields:
 - `solve_coherence`
 - `fast_graph`
 - `graph_lookback_days`
+- `current_max_age_hours`
 
-`stats` includes graph counts and `history_mode`, which is either `full` or
-`fast_graph_lookback`.
+`stats` includes graph counts, `history_mode`, current-market eligibility
+counts, the global current epoch, and the minimum accepted current epoch.
+`history_mode` is either `full` or `fast_graph_lookback`.
 
 Query commands read the manifest before opening artifacts. That lets them
 distinguish intentionally skipped artifacts from missing or stale output files.

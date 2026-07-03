@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from .benchmark import benchmark_compare, benchmark_summary
-from .build import build
+from .build import DEFAULT_CURRENT_MAX_AGE_HOURS, build
 from .queries import q
 from .search import read_rows, resolve_node, search_nodes
 
@@ -33,6 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-coherence", action="store_true")
     p.add_argument("--fast-graph", action="store_true")
     p.add_argument("--graph-lookback-days", type=int, default=None)
+    p.add_argument("--current-max-age-hours", type=float, default=DEFAULT_CURRENT_MAX_AGE_HOURS)
+    p.add_argument("--allow-stale-current", action="store_true")
 
     p = sub.add_parser("benchmark-summary")
     p.add_argument("--out", required=True, type=Path)
@@ -100,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
             graph_lookback_days = args.graph_lookback_days if args.graph_lookback_days is not None else 30
             if graph_lookback_days <= 0:
                 raise ValueError("--graph-lookback-days must be positive")
+            current_max_age_hours = None if args.allow_stale_current else args.current_max_age_hours
+            if current_max_age_hours is not None and current_max_age_hours <= 0:
+                raise ValueError("--current-max-age-hours must be positive")
             stats = build(
                 args.input,
                 args.out,
@@ -110,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
                 solve_coherence=not args.skip_coherence,
                 fast_graph=args.fast_graph,
                 graph_lookback_days=graph_lookback_days,
+                current_max_age_hours=current_max_age_hours,
             )
             for key, value in stats.items():
                 print(f"{key}: {value}")

@@ -201,6 +201,7 @@ def test_build_manifest_marks_success(synthetic_output: Path) -> None:
     assert manifest["build_options"] == {
         "fast_graph": False,
         "graph_lookback_days": 30,
+        "current_max_age_hours": None,
         "solve_coherence": True,
         "write_prices": True,
     }

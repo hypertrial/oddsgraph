@@ -150,7 +150,7 @@ def mini_wc2026_output(tmp_path_factory: pytest.TempPathFactory) -> Path:
     input_path = base / "mini_wc2026.parquet"
     out = base / "out"
     write_mini_wc2026_oracle_input(input_path)
-    build(input_path, out)
+    build(input_path, out, current_max_age_hours=None)
     return out
 
 

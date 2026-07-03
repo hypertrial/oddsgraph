@@ -16,7 +16,7 @@ def test_build_can_skip_prices_and_keep_query_artifacts(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     out = tmp_path / "out"
-    build(synthetic_input, out, write_prices=False)
+    build(synthetic_input, out, write_prices=False, current_max_age_hours=None)
 
     manifest = json.loads((out / "build_manifest.json").read_text())
     assert manifest["build_options"]["write_prices"] is False
@@ -38,7 +38,7 @@ def test_build_can_skip_coherence_and_keep_conditionals(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     out = tmp_path / "out"
-    build(synthetic_input, out, solve_coherence=False)
+    build(synthetic_input, out, solve_coherence=False, current_max_age_hours=None)
 
     manifest = json.loads((out / "build_manifest.json").read_text())
     assert manifest["build_options"]["solve_coherence"] is False
@@ -76,12 +76,14 @@ def test_cli_build_can_skip_prices_and_coherence(synthetic_input: Path, tmp_path
         "--out", str(out),
         "--skip-prices",
         "--skip-coherence",
+        "--allow-stale-current",
     ]) == 0
 
     manifest = json.loads((out / "build_manifest.json").read_text())
     assert manifest["build_options"] == {
         "fast_graph": False,
         "graph_lookback_days": 30,
+        "current_max_age_hours": None,
         "solve_coherence": False,
         "write_prices": False,
     }
@@ -104,12 +106,14 @@ def test_fast_graph_mode_keeps_query_artifacts(
         "--out", str(out),
         "--fast-graph",
         "--graph-lookback-days", "1",
+        "--allow-stale-current",
     ]) == 0
 
     manifest = json.loads((out / "build_manifest.json").read_text())
     assert manifest["build_options"] == {
         "fast_graph": True,
         "graph_lookback_days": 1,
+        "current_max_age_hours": None,
         "solve_coherence": False,
         "write_prices": False,
     }

@@ -25,8 +25,11 @@ stay outside source control.
 Use [hypertrial/oddsfox](https://github.com/hypertrial/oddsfox) to build and
 export the source data. OddsFox documents the local pipeline in its
 [quickstart](https://github.com/hypertrial/oddsfox/blob/main/docs/quickstart.md).
-For the current workflow, export
-`polymarket_marts.selected_token_hourly_odds` as parquet.
+For graph builds, export
+`polymarket_marts.selected_token_live_hourly_odds` as parquet from OddsFox
+(`scripts/export_selected_hourly_odds.py --live-current`). The historical
+`selected_token_hourly_odds` export remains useful for audits and backtests;
+`oddsgraph` also defensively filters stale or closed markets by default.
 
 The exported parquet should match the schema in
 [selected_token_hourly_odds_20260703T095031Z.md](selected_token_hourly_odds_20260703T095031Z.md).
@@ -45,7 +48,7 @@ Run a full build when you want the complete artifact set:
 
 ```bash
 python -m oddsgraph.cli build \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
+  --input selected_token_live_hourly_odds_20260703T095031Z.parquet \
   --out output/wc2026
 ```
 
@@ -54,7 +57,7 @@ lookback-scoped historical node and market statistics:
 
 ```bash
 python -m oddsgraph.cli build \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
+  --input selected_token_live_hourly_odds_20260703T095031Z.parquet \
   --out output/wc2026-fast-graph \
   --fast-graph \
   --graph-lookback-days 30

@@ -65,7 +65,13 @@ def test_manifest_shape_is_documented() -> None:
         "stage_timings",
     }
     taxonomy_keys = {"name", "path", "hash"}
-    build_option_keys = {"write_prices", "solve_coherence", "fast_graph", "graph_lookback_days"}
+    build_option_keys = {
+        "write_prices",
+        "solve_coherence",
+        "fast_graph",
+        "graph_lookback_days",
+        "current_max_age_hours",
+    }
 
     for key in sorted(manifest_keys | taxonomy_keys | build_option_keys):
         assert f"`{key}`" in builds_doc
