@@ -39,14 +39,14 @@ Examples:
 
 ```bash
 python -m oddsfox_graph.cli build \
-  --input /tmp/wc2026_graph_hourly.parquet \
-  --out output/wc2026
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026"
 ```
 
 ```bash
 python -m oddsfox_graph.cli build \
-  --input /tmp/wc2026_graph_hourly.parquet \
-  --out output/wc2026-fast-graph \
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026-fast-graph" \
   --fast-graph \
   --graph-lookback-days 30
 ```
@@ -58,7 +58,7 @@ runtime, build options, graph counts, artifact count, and the slowest recorded
 build stages.
 
 ```bash
-python -m oddsfox_graph.cli benchmark-summary --out output/wc2026
+python -m oddsfox_graph.cli benchmark-summary --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026"
 ```
 
 ### `benchmark-compare`
@@ -77,8 +77,8 @@ Flags:
 
 ```bash
 python -m oddsfox_graph.cli benchmark-compare \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
-  --out-root output/benchmark_compare \
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out-root "$ODDSFOX_DATA_DIR/artifacts/manual/benchmark_compare" \
   --graph-lookback-days 30
 ```
 

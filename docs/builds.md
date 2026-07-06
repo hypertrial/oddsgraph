@@ -25,8 +25,8 @@ Legacy minutely parquet with `odds_timestamp`, `odds_timestamp_epoch`, and
 
 ```bash
 python -m oddsfox_graph.cli build \
-  --input /tmp/wc2026_graph_hourly.parquet \
-  --out output/wc2026
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026"
 ```
 
 Full builds write all default parquet artifacts, all default reports, and

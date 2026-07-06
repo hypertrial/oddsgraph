@@ -10,14 +10,14 @@ Use a fresh ignored output directory for each run:
 
 ```bash
 python -m oddsfox_graph.cli build \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
-  --out output/perf_full
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/perf_full"
 ```
 
 ```bash
 python -m oddsfox_graph.cli build \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
-  --out output/perf_fast_graph \
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/perf_fast_graph" \
   --fast-graph \
   --graph-lookback-days 30
 ```
@@ -25,15 +25,15 @@ python -m oddsfox_graph.cli build \
 Summarize a completed run:
 
 ```bash
-python -m oddsfox_graph.cli benchmark-summary --out output/perf_fast_graph
+python -m oddsfox_graph.cli benchmark-summary --out "$ODDSFOX_DATA_DIR/artifacts/manual/perf_fast_graph"
 ```
 
 Run a paired full/fast graph comparison:
 
 ```bash
 python -m oddsfox_graph.cli benchmark-compare \
-  --input selected_token_hourly_odds_20260703T095031Z.parquet \
-  --out-root output/debt_pr_benchmark \
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out-root "$ODDSFOX_DATA_DIR/artifacts/manual/debt_pr_benchmark" \
   --graph-lookback-days 30
 ```
 

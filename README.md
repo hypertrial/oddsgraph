@@ -30,9 +30,11 @@ For hosted WC2026 graph builds, export
 `polymarket_wc2026_marts.polymarket_wc2026_graph_token_hourly_odds`:
 
 ```bash
+export ODDSFOX_DATA_DIR="${ODDSFOX_DATA_DIR:-/Volumes/Mac SSD/hypertrial_trilemma/hypertrial/OddsFox/.runtime}"
+mkdir -p "$ODDSFOX_DATA_DIR/exports"
 uv run python scripts/export_polymarket_wc2026_graph_hourly_odds.py \
   --snapshot-copy \
-  --output /tmp/wc2026_graph_hourly.parquet
+  --output "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet"
 ```
 
 This graph export carries both Yes/No tokens and dbt-clean team, stage,
@@ -54,8 +56,8 @@ Run a full build when you want the complete artifact set:
 
 ```bash
 python -m oddsfox_graph.cli build \
-  --input /tmp/wc2026_graph_hourly.parquet \
-  --out output/wc2026
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026"
 ```
 
 Run fast graph mode when you want graph/query artifacts quickly and can accept
@@ -63,8 +65,8 @@ lookback-scoped historical node and market statistics:
 
 ```bash
 python -m oddsfox_graph.cli build \
-  --input /tmp/wc2026_graph_hourly.parquet \
-  --out output/wc2026-fast-graph \
+  --input "$ODDSFOX_DATA_DIR/exports/wc2026_graph_hourly.parquet" \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026-fast-graph" \
   --fast-graph \
   --graph-lookback-days 30
 ```
@@ -83,44 +85,44 @@ graph API.
 Search nodes:
 
 ```bash
-python -m oddsfox_graph.cli search --out output/wc2026 --query "Brazil"
+python -m oddsfox_graph.cli search --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026" --query "Brazil"
 ```
 
 Show high-volume nodes:
 
 ```bash
-python -m oddsfox_graph.cli nodes --out output/wc2026 --top 50
+python -m oddsfox_graph.cli nodes --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026" --top 50
 ```
 
 Show trusted structural or semantic logic edges:
 
 ```bash
-python -m oddsfox_graph.cli edges --out output/wc2026 --edge-type implies --top 50
+python -m oddsfox_graph.cli edges --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026" --edge-type implies --top 50
 ```
 
 Show price-threshold relationships that are not accepted as logic:
 
 ```bash
-python -m oddsfox_graph.cli price-edges --out output/wc2026 --edge-type implies --top 50
+python -m oddsfox_graph.cli price-edges --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026" --edge-type implies --top 50
 ```
 
 Show pricing or logic violations:
 
 ```bash
-python -m oddsfox_graph.cli violations --out output/wc2026 --top 50
+python -m oddsfox_graph.cli violations --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026" --top 50
 ```
 
 Explain a node:
 
 ```bash
-python -m oddsfox_graph.cli explain --out output/wc2026 --node "<token id or unique text>"
+python -m oddsfox_graph.cli explain --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026" --node "<token id or unique text>"
 ```
 
 Ask for a conditional probability row:
 
 ```bash
 python -m oddsfox_graph.cli condition \
-  --out output/wc2026 \
+  --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026" \
   --a 60941235333934119537308581623022145063589498358463811604437431757990716193139 \
   --b 69254358704504551873876012384649223770132435379419074198292590735170180021451
 ```
@@ -128,7 +130,7 @@ python -m oddsfox_graph.cli condition \
 Summarize a completed build manifest:
 
 ```bash
-python -m oddsfox_graph.cli benchmark-summary --out output/wc2026
+python -m oddsfox_graph.cli benchmark-summary --out "$ODDSFOX_DATA_DIR/artifacts/manual/wc2026"
 ```
 
 ## Documentation Map
