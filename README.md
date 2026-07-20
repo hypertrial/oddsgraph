@@ -62,6 +62,17 @@ From the repo root:
 python -m pip install -e ".[dev]"
 ```
 
+## Validation
+
+Run the complete local check before pushing:
+
+```bash
+python -m pytest -q
+```
+
+GitHub runs the same short suite automatically for pull requests and `main`.
+The `Manual Full Validation` workflow runs the same command on demand.
+
 ## Build Artifacts
 
 Run a full build when you want the complete artifact set:

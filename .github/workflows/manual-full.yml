@@ -1,16 +1,14 @@
-name: CI
+name: Manual Full Validation
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: manual-full-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
